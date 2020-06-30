@@ -12,14 +12,18 @@
 static NSString *VODPrefix = @"vod";
 static NSString *HLSPrefix = @"hls";
 
+MCSFileExtension const MCSHLSIndexFileExtension = @".m3u8";
+MCSFileExtension const MCSHLSTsFileExtension = @".ts";
+MCSFileExtension const MCSHLSAESKeyFileExtension = @".key";
+
 @implementation MCSFileManager
 + (NSString *)rootDirectoryPath {
     static NSString *rootDirectoryPath;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
         rootDirectoryPath = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).lastObject stringByAppendingPathComponent:@"com.SJMediaCacheServer.cache"];
-        if ( ![[NSFileManager defaultManager] fileExistsAtPath:rootDirectoryPath] ) {
-            [[NSFileManager defaultManager] createDirectoryAtPath:rootDirectoryPath withIntermediateDirectories:YES attributes:nil error:NULL];
+        if ( ![NSFileManager.defaultManager fileExistsAtPath:rootDirectoryPath] ) {
+            [NSFileManager.defaultManager createDirectoryAtPath:rootDirectoryPath withIntermediateDirectories:YES attributes:nil error:NULL];
             const char *filePath = [rootDirectoryPath fileSystemRepresentation];
             const char *attrName = "com.apple.MobileBackup";
             u_int8_t attrValue = 1;
@@ -40,30 +44,35 @@ static NSString *HLSPrefix = @"hls";
 + (NSString *)getFilePathWithName:(NSString *)name inResource:(NSString *)resourceName {
     return [[self getResourcePathWithName:resourceName] stringByAppendingPathComponent:name];
 }
+
+// format: resourceName_aes_index.key
 // HLS
-//
-+ (nullable NSString *)hls_AESKeyFilenameForURI:(NSString *)URI {
-    return @"aes.key";
++ (nullable NSString *)hls_AESKeyFilenameAtIndex:(NSInteger)index inResource:(NSString *)resource {
+    return [NSString stringWithFormat:@"%@_aes_%ld.key", resource, (long)index];
+}
+
+// format: resourceName_aes_index.key
+// HLS
++ (nullable NSString *)hls_resourceNameForAESKeyProxyURL:(NSURL *)URL {
+    return [URL.lastPathComponent componentsSeparatedByString:@"_"].firstObject;
+}
+
+// format: resourceName_aes_index.key
+// HLS
++ (nullable NSString *)hls_AESKeyFilePathForAESKeyProxyURL:(NSURL *)URL inResource:(NSString *)resource {
+    NSString *filename = [self _filenameForUrl:URL.absoluteString];
+    return [self getFilePathWithName:filename inResource:resource];
 }
 
 // format: resourceName_tsName
 // HLS
 + (nullable NSString *)hls_tsNameForUrl:(NSString *)url inResource:(nonnull NSString *)resource {
-    NSString *component = url.lastPathComponent;
-    NSRange range = [component rangeOfString:@"?"];
-    if ( range.location != NSNotFound ) {
-        component = [component substringToIndex:range.location];
-    }
-    return [NSString stringWithFormat:@"%@_%@", resource, component];
+    NSString *filename = [self _filenameForUrl:url];
+    return [NSString stringWithFormat:@"%@_%@", resource, filename];
 }
 
 + (nullable NSString *)hls_tsNameForTsProxyURL:(NSURL *)URL {
-    NSString *component = URL.absoluteString.lastPathComponent;
-    NSRange range = [component rangeOfString:@"?"];
-    if ( range.location != NSNotFound ) {
-        component = [component substringToIndex:range.location];
-    }
-    return component;
+    return [self _filenameForUrl:URL.absoluteString];
 }
 
 // format: resourceName_tsName
@@ -164,7 +173,7 @@ static NSString *HLSPrefix = @"hls";
 // format: // VOD前缀_偏移量_序号_扩展名
 // VOD
 + (NSUInteger)offsetOfContent:(NSString *)name {
-    return (NSUInteger)[[name componentsSeparatedByString:name][1] longLongValue];
+    return (NSUInteger)[[name componentsSeparatedByString:@"_"][1] longLongValue];
 }
 
 // format: HLS前缀_ts长度_序号_ts文件名
@@ -179,6 +188,17 @@ static NSString *HLSPrefix = @"hls";
 // HLS
 + (NSUInteger)tsTotalLengthOfContent:(NSString *)name {
     return (NSUInteger)[[name componentsSeparatedByString:@"_"][1] longLongValue];
+}
+
+#pragma mark -
+
++ (NSString *)_filenameForUrl:(NSString *)url {
+    NSString *name = url.lastPathComponent;
+    NSRange range = [name rangeOfString:@"?"];
+    if ( range.location != NSNotFound ) {
+        name = [name substringToIndex:range.location];
+    }
+    return name;
 }
 @end
 
@@ -200,5 +220,33 @@ static NSString *HLSPrefix = @"hls";
 
 + (NSUInteger)fileSizeAtPath:(NSString *)path {
     return (NSUInteger)[NSFileManager.defaultManager attributesOfItemAtPath:path error:NULL].fileSize;
+}
+@end
+
+@implementation MCSFileManager (FileManager)
++ (BOOL)removeItemAtPath:(NSString *)path error:(NSError *__autoreleasing  _Nullable *)error {
+    return [NSFileManager.defaultManager removeItemAtPath:path error:error];
+}
+
++ (BOOL)fileExistsAtPath:(NSString *)path {
+    return [NSFileManager.defaultManager fileExistsAtPath:path];
+}
+
++ (BOOL)checkoutResourceWithName:(NSString *)name error:(NSError **)error {
+    NSString *path = [MCSFileManager getResourcePathWithName:name];
+    if ( ![MCSFileManager fileExistsAtPath:path] ) {
+        return [NSFileManager.defaultManager createDirectoryAtPath:path withIntermediateDirectories:YES attributes:nil error:error];
+    }
+    return YES;
+}
+
++ (BOOL)removeResourceWithName:(NSString *)name error:(NSError **)error {
+    NSString *path = [MCSFileManager getResourcePathWithName:name];
+    return [NSFileManager.defaultManager removeItemAtPath:path error:NULL];
+}
+
++ (BOOL)removeContentWithName:(NSString *)name inResource:(NSString *)resourceName error:(NSError **)error {
+    NSString *path = [MCSFileManager getFilePathWithName:name inResource:resourceName];
+    return [self removeItemAtPath:path error:error];
 }
 @end

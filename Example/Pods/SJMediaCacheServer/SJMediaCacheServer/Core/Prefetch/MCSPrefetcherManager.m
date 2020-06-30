@@ -55,10 +55,10 @@
 
 - (void)prefetcher:(id<MCSPrefetcher>)prefetcher didCompleteWithError:(NSError *_Nullable)error {
     if ( _mcs_completionBlock != nil ) {
+        [self _completeOperation];
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_mcs_completionBlock(error);
         });
-        [self _completeOperation];
     }
 }
 
@@ -95,14 +95,13 @@
 - (void)cancel {
     @synchronized (self) {
         _isCancelled = YES;
-        _URL = nil;
+        if ( _isExecuting ) [self _completeOperation];
     }
 }
 
 - (void)finished {
     @synchronized (self) {
         if ( _isExecuting ) [self _completeOperation];
-        _URL = nil;
     }
 }
 
@@ -114,6 +113,7 @@
         [self willChangeValueForKey:@"isExecuting"];
         
         [_prefetcher close];
+        _prefetcher = nil;
         _isExecuting = NO;
         _isFinished = YES;
         

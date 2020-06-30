@@ -32,7 +32,11 @@
 }
 
 - (NSURL *)playbackURLForCacheWithURL:(NSURL *)URL {
-    return URL;
+    return [MCSURLRecognizer.shared proxyURLWithURL:URL];
+}
+
+- (NSString *)AESKeyFilePathForAESKeyProxyURL:(NSURL *)URL {
+    return [MCSFileManager hls_AESKeyFilePathForAESKeyProxyURL:URL inResource:self.name];
 }
 
 - (NSString *)tsNameForTsProxyURL:(NSURL *)URL {
@@ -46,7 +50,7 @@
         for ( MCSResourcePartialContent *content in self.contents ) {
             if ( [content.tsName isEqualToString:tsName] ) {
                 NSString *contentPath = [MCSFileManager getFilePathWithName:content.name inResource:self.name];
-                NSUInteger length = (NSUInteger)[NSFileManager.defaultManager attributesOfItemAtPath:contentPath error:NULL].fileSize;
+                NSUInteger length = [MCSFileManager fileSizeAtPath:contentPath];
                 if ( length == content.tsTotalLength )
                     return content;
             }
@@ -143,10 +147,7 @@
             return;
          
         for ( MCSResourcePartialContent *content in deleteContents ) {
-            NSString *path = [self filePathOfContent:content];
-            if ( [NSFileManager.defaultManager removeItemAtPath:path error:NULL] ) {
-                [self removeContent:content];
-            }
+            [self removeContent:content];
         }
         
         [self _contentsDidChange];

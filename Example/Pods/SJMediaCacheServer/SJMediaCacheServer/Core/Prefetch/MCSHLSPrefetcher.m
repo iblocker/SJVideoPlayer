@@ -76,8 +76,8 @@
         if ( _isClosed )
             return;
         
-        _isClosed = YES;
         [_reader close];
+        _isClosed = YES;
         
         MCSLog(@"%@: <%p>.close { preloadSize: %lu };\n", NSStringFromClass(self.class), self, (unsigned long)self.preloadSize);
     } @catch (__unused NSException *exception) {
@@ -157,7 +157,8 @@
                 if ( data.length == 0 )
                     break;
                 
-                _offset += data.length;
+                if ( _fragmentIndex != NSNotFound )
+                    _offset += data.length;
                 
                 _progress = _offset * 1.0 / self.preloadSize;
                 [self.delegate prefetcher:self progressDidChange:_progress];
