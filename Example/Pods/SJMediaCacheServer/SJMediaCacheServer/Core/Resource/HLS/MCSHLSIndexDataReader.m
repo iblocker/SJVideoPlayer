@@ -12,163 +12,153 @@
 #import "MCSResourceResponse.h"
 #import "MCSHLSResource.h"
 #import "MCSFileManager.h"
+#import "MCSQueue.h"
 
-@interface MCSHLSIndexDataReader ()<MCSHLSParserDelegate, MCSResourceDataReaderDelegate, NSLocking> {
-    dispatch_semaphore_t _semaphore;
-}
-@property (nonatomic, strong) NSURL *URL;
+@interface MCSHLSIndexDataReader ()<MCSHLSParserDelegate, MCSResourceDataReaderDelegate>
+@property (nonatomic, strong) NSURLRequest *request;
 
 @property (nonatomic) BOOL isCalledPrepare;
-@property (nonatomic) BOOL isPrepared;
 @property (nonatomic) BOOL isClosed;
-@property (nonatomic) BOOL isDone;
 
 @property (nonatomic, weak, nullable) MCSHLSResource *resource;
 @property (nonatomic, strong, nullable) MCSResourceFileDataReader *reader;
 @property (nonatomic, strong, nullable) id<MCSResourceResponse> response;
+@property (nonatomic) float networkTaskPriority;
 @end
 
 @implementation MCSHLSIndexDataReader
 @synthesize delegate = _delegate;
-@synthesize delegateQueue = _delegateQueue;
-- (instancetype)initWithResource:(MCSHLSResource *)resource URL:(NSURL *)URL delegate:(id<MCSResourceDataReaderDelegate>)delegate delegateQueue:(dispatch_queue_t)queue {
+- (instancetype)initWithResource:(MCSHLSResource *)resource request:(NSURLRequest *)request networkTaskPriority:(float)networkTaskPriority delegate:(id<MCSResourceDataReaderDelegate>)delegate {
     self = [super init];
     if ( self ) {
-        _URL = URL;
+        _networkTaskPriority = networkTaskPriority;
+        _request = request;
         _resource = resource;
         _parser = resource.parser;
         _delegate = delegate;
-        _delegateQueue = queue;
-        _semaphore = dispatch_semaphore_create(1);
     }
     return self;
 }
 
 - (NSString *)description {
-    return [NSString stringWithFormat:@"%@:<%p> { URL: %@\n };", NSStringFromClass(self.class), self, _URL];
+    return [NSString stringWithFormat:@"%@:<%p> { URL: %@\n };", NSStringFromClass(self.class), self, _request.URL];
 }
 
 - (void)prepare {
-    [self lock];
-    @try {
+    dispatch_barrier_sync(MCSHLSIndexDataReaderQueue(), ^{
         if ( _isClosed || _isCalledPrepare )
             return;
         
-        MCSLog(@"%@: <%p>.prepare { URL: %@ };\n", NSStringFromClass(self.class), self, _URL);
+        MCSLog(@"%@: <%p>.prepare { URL: %@ };\n", NSStringFromClass(self.class), self, _request.URL);
+        
+        NSParameterAssert(_resource);
         
         _isCalledPrepare = YES;
         
         // parse the m3u8 file
         if ( _parser == nil ) {
-            _parser = [MCSHLSParser.alloc initWithURL:_URL inResource:_resource.name delegate:self delegateQueue:_delegateQueue];
+            _parser = [MCSHLSParser.alloc initWithResource:_resource.name request:[_request mcs_requestWithHTTPAdditionalHeaders:[_resource.configuration HTTPAdditionalHeadersForDataRequestsOfType:MCSDataTypeHLSPlaylist]] networkTaskPriority:_networkTaskPriority delegate:self];
             [_parser prepare];
             return;
         }
         
         [self _parseDidFinish];
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    });
+}
+
+- (nullable MCSResourceFileDataReader *)reader {
+    __block MCSResourceFileDataReader *reader = nil;
+    dispatch_sync(MCSHLSIndexDataReaderQueue(), ^{
+        reader = _reader;
+    });
+    return reader;
 }
 
 - (NSData *)readDataOfLength:(NSUInteger)length {
-    [self lock];
-    @try {
-        return [_reader readDataOfLength:length];
-    } @catch (__unused NSException *exception) {
-    
-    } @finally {
-        [self unlock];
-    }
+    return [self.reader readDataOfLength:length];
+}
+
+- (BOOL)seekToOffset:(NSUInteger)offset {
+    return [self.reader seekToOffset:offset];
 }
 
 - (void)close {
-    [self lock];
-    [self _close];
-    [self unlock];
+    dispatch_barrier_sync(MCSHLSIndexDataReaderQueue(), ^{
+        [self _close];
+    });
 }
 
 #pragma mark -
 
+- (NSUInteger)availableLength {
+    return self.reader.availableLength;
+}
+
+- (NSUInteger)offset {
+    return self.reader.offset;
+}
+
 - (BOOL)isPrepared {
-    [self lock];
-    @try {
-        return _isPrepared;
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    return self.reader.isPrepared;
 }
 
 - (BOOL)isDone {
-    [self lock];
-    @try {
-        return _reader.isDone;
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    return self.reader.isDone;
 }
 
 - (id<MCSResourceResponse>)response {
-    [self lock];
-    @try {
-        return _response;
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    __block id<MCSResourceResponse> response = nil;
+    dispatch_sync(MCSHLSIndexDataReaderQueue(), ^{
+        response = _response;
+    });
+    return response;
 }
 
 #pragma mark - MCSHLSParserDelegate
 
 - (void)parserParseDidFinish:(MCSHLSParser *)parser {
-    [self lock];
-    [self _parseDidFinish];
-    [self unlock];
+    dispatch_barrier_sync(MCSHLSIndexDataReaderQueue(), ^{
+        [self _parseDidFinish];
+    });
 }
 
 - (void)parser:(MCSHLSParser *)parser anErrorOccurred:(NSError *)error {
-    [self lock];
-    [self _onError:error];
-    [self unlock];
+    dispatch_barrier_sync(MCSHLSIndexDataReaderQueue(), ^{
+        [self _onError:error];
+    });
 }
 
 #pragma mark - MCSResourceDataReaderDelegate
 
 - (void)readerPrepareDidFinish:(id<MCSResourceDataReader>)reader {
-    [self lock];
-    NSString *indexFilePath = _parser.indexFilePath;
-    NSUInteger length = [MCSFileManager fileSizeAtPath:indexFilePath];
-    _response = [MCSResourceResponse.alloc initWithServer:@"localhost" contentType:@"application/x-mpegurl" totalLength:length];
-    _isPrepared = YES;
-    dispatch_async(_delegateQueue, ^{
-        [self.delegate readerPrepareDidFinish:self];
+    dispatch_barrier_sync(MCSHLSIndexDataReaderQueue(), ^{
+        NSString *indexFilePath = _parser.indexFilePath;
+        NSUInteger length = [MCSFileManager fileSizeAtPath:indexFilePath];
+        _response = [MCSResourceResponse.alloc initWithServer:@"localhost" contentType:@"application/x-mpegurl" totalLength:length];
     });
-    [self unlock];
+    [_delegate readerPrepareDidFinish:self];
 }
 
-- (void)readerHasAvailableData:(id<MCSResourceDataReader>)reader {
-    dispatch_async(_delegateQueue, ^{
-        [self.delegate readerHasAvailableData:self];
-    });
+- (void)reader:(id<MCSResourceDataReader>)reader hasAvailableDataWithLength:(NSUInteger)length {
+    [_delegate reader:self hasAvailableDataWithLength:length];
 }
 
 - (void)reader:(id<MCSResourceDataReader>)reader anErrorOccurred:(NSError *)error {
-    [self _onError:error];
+    dispatch_barrier_sync(MCSHLSIndexDataReaderQueue(), ^{
+        [self _onError:error];
+    });
 }
 
 #pragma mark -
 
 - (void)_onError:(NSError *)error {
+    if ( _isClosed )
+        return;
+    
     [self _close];
-    dispatch_async(_delegateQueue, ^{
-        [self.delegate reader:self anErrorOccurred:error];
+    
+    dispatch_async(MCSDelegateQueue(), ^{
+        [self->_delegate reader:self anErrorOccurred:error];
     });
 }
 
@@ -178,10 +168,13 @@
     [_reader close];
     _isClosed = YES;
     
-    MCSLog(@"%@: <%p>.close { URL: %@ };\n", NSStringFromClass(self.class), self, _URL);
+    MCSLog(@"%@: <%p>.close { URL: %@ };\n", NSStringFromClass(self.class), self, _request.URL);
 }
 
 - (void)_parseDidFinish {
+    if ( _reader != nil )
+        return;
+    
     if ( _resource.parser != _parser ) {
         _resource.parser = _parser;
     }
@@ -189,17 +182,7 @@
     NSString *indexFilePath = _parser.indexFilePath;
     NSUInteger fileSize = [MCSFileManager fileSizeAtPath:indexFilePath];
     NSRange range = NSMakeRange(0, fileSize);
-    _reader = [MCSResourceFileDataReader.alloc initWithRange:range path:indexFilePath readRange:range delegate:_delegate delegateQueue:_delegateQueue];
+    _reader = [MCSResourceFileDataReader.alloc initWithResource:_resource range:range path:indexFilePath readRange:range delegate:_delegate];
     [_reader prepare];
-}
-
-#pragma mark -
-
-- (void)lock {
-    dispatch_semaphore_wait(_semaphore, DISPATCH_TIME_FOREVER);
-}
-
-- (void)unlock {
-    dispatch_semaphore_signal(_semaphore);
 }
 @end

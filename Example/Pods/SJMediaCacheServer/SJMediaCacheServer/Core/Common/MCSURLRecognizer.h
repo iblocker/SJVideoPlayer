@@ -6,7 +6,7 @@
 //  Copyright © 2020 changsanjiang@gmail.com. All rights reserved.
 //
 
-#import "MCSDefines.h"
+#import "MCSInterfaces.h"
 #import "MCSProxyServer.h"
 
 NS_ASSUME_NONNULL_BEGIN
@@ -24,7 +24,14 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSString *)resourceNameForURL:(NSURL *)URL;
 - (MCSResourceType)resourceTypeForURL:(NSURL *)URL;
 
-- (NSURL *)proxyURLWithTsName:(NSString *)tsName;
+
+- (NSString *)nameWithUrl:(NSString *)url extension:(NSString *)extension;
 @end
 
+
+@interface MCSURLRecognizer (HLS)
+- (NSURL *)proxyURLWithTsURI:(NSString *)TsURI;
+- (NSString *)proxyTsURIWithUrl:(NSString *)url inResource:(NSString *)resource;
+- (NSString *)proxyAESKeyURIWithUrl:(NSString *)url inResource:(NSString *)resource;
+@end
 NS_ASSUME_NONNULL_END

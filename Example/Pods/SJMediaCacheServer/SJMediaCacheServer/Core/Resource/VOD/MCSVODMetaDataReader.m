@@ -9,20 +9,19 @@
 #import "MCSDownload.h"
 #import "NSURLRequest+MCS.h"
 #import "MCSUtils.h"
+#import "MCSQueue.h"
 
 @interface MCSVODMetaDataReader ()<MCSDownloadTaskDelegate>
 @property (nonatomic, strong) NSURLRequest *request;
 @property (nonatomic, strong) NSURLSessionTask *task;
-@property (nonatomic, strong) dispatch_queue_t delegateQueue;
 @end
 
 @implementation MCSVODMetaDataReader
-- (instancetype)initWithRequest:(NSURLRequest *)request delegate:(id<MCSVODMetaDataReaderDelegate>)delegate delegateQueue:(nonnull dispatch_queue_t)queue {
+- (instancetype)initWithRequest:(NSURLRequest *)request delegate:(id<MCSVODMetaDataReaderDelegate>)delegate {
     self = [super init];
     if ( self ) {
         _request = request;
         _delegate = delegate;
-        _delegateQueue = queue;
         [self _prepare];
     }
     return self;
@@ -36,11 +35,11 @@
     _contentType = MCSGetResponseContentType(response);
     _server = MCSGetResponseServer(response);
     _totalLength = MCSGetResponseContentRange(response).totalLength;
-    _pathExtension = response.suggestedFilename.pathExtension;
+    _pathExtension = MCSSuggestedFilePathExtension(response);
     [task cancel];
     
-    dispatch_async(_delegateQueue, ^{
-        [self.delegate metaDataReader:self didCompleteWithError:nil];
+    dispatch_barrier_sync(MCSDelegateQueue(), ^{
+        [_delegate metaDataReader:self didCompleteWithError:nil];
     });
 }
 
@@ -50,8 +49,8 @@
 
 - (void)downloadTask:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
     if ( error && error.code != NSURLErrorCancelled ) {
-        dispatch_async(_delegateQueue, ^{
-            [self.delegate metaDataReader:self didCompleteWithError:error];
+        dispatch_barrier_sync(MCSDelegateQueue(), ^{
+            [_delegate metaDataReader:self didCompleteWithError:error];
         });
     }
 }

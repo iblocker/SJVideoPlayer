@@ -17,55 +17,42 @@ UIKIT_EXTERN MCSFileExtension const MCSHLSTsFileExtension;
 UIKIT_EXTERN MCSFileExtension const MCSHLSAESKeyFileExtension;
 
 @interface MCSFileManager : NSObject
++ (void)lockWithBlock:(void(^)(void))block;
 + (NSString *)rootDirectoryPath;
 + (NSString *)databasePath;
 + (NSString *)getResourcePathWithName:(NSString *)name;
 + (NSString *)getFilePathWithName:(NSString *)name inResource:(NSString *)resourceName;
-// HLS
-//
-+ (nullable NSString *)hls_AESKeyFilenameAtIndex:(NSInteger)index inResource:(NSString *)resource;
++ (nullable NSArray<MCSResourcePartialContent *> *)getContentsInResource:(NSString *)resourceName;
+@end
 
-// HLS
-//
-+ (nullable NSString *)hls_AESKeyFilePathForAESKeyProxyURL:(NSURL *)URL inResource:(NSString *)resource;
 
-// HLS
-//
-+ (nullable NSString *)hls_tsNameForUrl:(NSString *)url inResource:(NSString *)resource;
-
-// HLS
-//
-+ (nullable NSString *)hls_tsNameForTsProxyURL:(NSURL *)URL;
-
-// HLS
-//
-+ (nullable NSString *)hls_indexFilePathInResource:(NSString *)resourceName;
-
-// HLS
-//
-+ (nullable NSString *)hls_tsFragmentsFilePathInResource:(NSString *)resourceName;
-
-// HLS
-//
-+ (nullable NSString *)hls_tsNamesFilePathInResource:(NSString *)resourceName;
-
-// HLS
-//
-+ (nullable NSString *)hls_resourceNameForTsProxyURL:(NSURL *)URL;
-
-// HLS
-//
-+ (nullable NSString *)hls_resourceNameForAESKeyProxyURL:(NSURL *)URL;
-
-// VOD
+@interface MCSFileManager (VOD)
 //      注意: 返回文件名
-+ (nullable NSString *)createContentFileInResource:(NSString *)resourceName atOffset:(NSUInteger)offset pathExtension:(nullable NSString *)pathExtension;
++ (nullable NSString *)vod_createContentFileInResource:(NSString *)resourceName atOffset:(NSUInteger)offset pathExtension:(nullable NSString *)pathExtension;
 
-// HLS
++ (NSUInteger)vod_offsetOfContent:(NSString *)contentFilename;
+@end
+
+
+@interface MCSFileManager (HLS_Index)
++ (NSString *)hls_indexFilePathInResource:(NSString *)resourceName;
+@end
+
+
+@interface MCSFileManager (HLS_AESKey)
+
++ (NSString *)hls_AESKeyFilePathInResource:(NSString *)resourceName AESKeyName:(NSString *)AESKeyName;
+
+@end
+
+
+@interface MCSFileManager (HLS_TS)
 //      注意: 返回文件名
 + (nullable NSString *)hls_createContentFileInResource:(NSString *)resourceName tsName:(NSString *)tsName tsTotalLength:(NSUInteger)length;
 
-+ (nullable NSArray<MCSResourcePartialContent *> *)getContentsInResource:(NSString *)resourceName;
++ (nullable NSString *)hls_TsNameOfContent:(NSString *)contentFilename;
+
++ (NSUInteger)hls_TsTotalLengthOfContent:(NSString *)contentFilename;
 
 @end
 

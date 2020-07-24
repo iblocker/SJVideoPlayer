@@ -22,6 +22,7 @@
 @end
 
 @interface MCSPrefetchOperation ()<MCSPrefetcherDelegate> {
+    dispatch_queue_t _queue;
     BOOL _isFinished;
     BOOL _isCancelled;
     BOOL _isExecuting;
@@ -41,85 +42,86 @@
         _preloadSize = bytes;
         _mcs_progressBlock = progressBlock;
         _mcs_completionBlock = completionBlock;
+        _queue = dispatch_get_global_queue(0, 0);
     }
     return self;
 }
 
 - (void)prefetcher:(id<MCSPrefetcher>)prefetcher progressDidChange:(float)progress {
     if ( _mcs_progressBlock != nil ) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self->_mcs_progressBlock(progress);
-        });
+        _mcs_progressBlock(progress);
     }
 }
 
 - (void)prefetcher:(id<MCSPrefetcher>)prefetcher didCompleteWithError:(NSError *_Nullable)error {
+    dispatch_barrier_sync(_queue, ^{
+        [self _completeOperationIfExecuting];
+    });
     if ( _mcs_completionBlock != nil ) {
-        [self _completeOperation];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self->_mcs_completionBlock(error);
-        });
+        _mcs_completionBlock(error);
     }
 }
 
 #pragma mark -
  
 - (void)start {
-    @synchronized (self) {
-        if ( _isCancelled || _URL == nil ) {
-            // Must move the operation to the finished state if it is canceled.
-            [self _completeOperation];
+    dispatch_barrier_sync(_queue, ^{
+        [self willChangeValueForKey:@"isExecuting"];
+        self->_isExecuting = YES;
+        [self didChangeValueForKey:@"isExecuting"];
+        
+        if ( self->_isCancelled || self->_URL == nil ) {
+            [self _completeOperationIfExecuting];
             return;
         }
         
-        
-        [self willChangeValueForKey:@"isExecuting"];
-        _isExecuting = YES;
-        [self didChangeValueForKey:@"isExecuting"];
- 
-        MCSResourceType type = [MCSURLRecognizer.shared resourceTypeForURL:_URL];
+        MCSResourceType type = [MCSURLRecognizer.shared resourceTypeForURL:self->_URL];
         switch ( type ) {
             case MCSResourceTypeVOD:
-                _prefetcher = [MCSVODPrefetcher.alloc initWithURL:_URL preloadSize:_preloadSize];
+                self->_prefetcher = [MCSVODPrefetcher.alloc initWithURL:self->_URL preloadSize:self->_preloadSize delegate:self delegateQueue:dispatch_get_main_queue()];
                 break;
             case MCSResourceTypeHLS:
-                _prefetcher = [MCSHLSPrefetcher.alloc initWithURL:_URL preloadSize:_preloadSize];
+                self->_prefetcher = [MCSHLSPrefetcher.alloc initWithURL:self->_URL preloadSize:self->_preloadSize delegate:self delegateQueue:dispatch_get_main_queue()];
                 break;
         }
-        if ( _mcs_progressBlock != nil || _mcs_completionBlock != nil )
-            _prefetcher.delegate = self;
-        [_prefetcher prepare];
-    }
+        [self->_prefetcher prepare];
+    });
 }
 
 - (void)cancel {
-    @synchronized (self) {
-        _isCancelled = YES;
-        if ( _isExecuting ) [self _completeOperation];
-    }
-}
+#ifdef DEBUG
+    NSLog(@"%d - -[%@ %s]", (int)__LINE__, NSStringFromClass([self class]), sel_getName(_cmd));
+#endif
 
-- (void)finished {
-    @synchronized (self) {
-        if ( _isExecuting ) [self _completeOperation];
-    }
+    dispatch_barrier_sync(_queue, ^{
+        if ( self->_isCancelled || self->_isFinished )
+            return;
+        
+        self->_isCancelled = YES;
+        
+        [self _completeOperationIfExecuting];
+    });
 }
 
 #pragma mark -
 
-- (void)_completeOperation {
-    @synchronized (self) {
-        [self willChangeValueForKey:@"isFinished"];
-        [self willChangeValueForKey:@"isExecuting"];
-        
-        [_prefetcher close];
-        _prefetcher = nil;
-        _isExecuting = NO;
-        _isFinished = YES;
-        
-        [self didChangeValueForKey:@"isExecuting"];
-        [self didChangeValueForKey:@"isFinished"];
-    }
+- (void)_completeOperationIfExecuting {
+    if ( !self->_isExecuting )
+        return;
+    
+    if ( self->_isFinished )
+        return;
+    
+    [self willChangeValueForKey:@"isFinished"];
+    [self willChangeValueForKey:@"isExecuting"];
+    
+    [self->_prefetcher close];
+    self->_prefetcher = nil;
+    self->_isExecuting = NO;
+    self->_isFinished = YES;
+    
+    [self didChangeValueForKey:@"isExecuting"];
+    [self didChangeValueForKey:@"isFinished"];
 }
 
 #pragma mark -
@@ -129,15 +131,19 @@
 }
 
 - (BOOL)isExecuting {
-    @synchronized (self) {
-        return _isExecuting;
-    }
+    __block BOOL isExecuting = NO;
+    dispatch_sync(_queue, ^{
+        isExecuting = self->_isExecuting;
+    });
+    return isExecuting;
 }
 
 - (BOOL)isFinished {
-    @synchronized (self) {
-        return _isFinished;
-    }
+    __block BOOL isFinished = NO;
+    dispatch_sync(_queue, ^{
+        isFinished = self->_isFinished;
+    });
+    return isFinished;
 }
 
 - (BOOL)isCancelled {
@@ -165,9 +171,18 @@
     self = [super init];
     if ( self ) {
         _operationQueue = NSOperationQueue.alloc.init;
-        _operationQueue.maxConcurrentOperationCount = 3;
+        _operationQueue.maxConcurrentOperationCount = 1;
+        _operationQueue.qualityOfService = NSQualityOfServiceBackground;
     }
     return self;
+}
+
+- (void)setMaxConcurrentPrefetchCount:(NSInteger)maxConcurrentPrefetchCount {
+    _operationQueue.maxConcurrentOperationCount = maxConcurrentPrefetchCount;
+}
+
+- (NSInteger)maxConcurrentPrefetchCount {
+    return _operationQueue.maxConcurrentOperationCount;
 }
 
 - (id<MCSPrefetchTask>)prefetchWithURL:(NSURL *)URL preloadSize:(NSUInteger)preloadSize {
@@ -178,5 +193,9 @@
     MCSPrefetchOperation *operation = [MCSPrefetchOperation.alloc initWithURL:URL preloadSize:preloadSize progress:progressBlock completed:completionBlock];
     [_operationQueue addOperation:operation];
     return operation;
+}
+
+- (void)cancelAllPrefetchTasks {
+    [_operationQueue cancelAllOperations];
 }
 @end

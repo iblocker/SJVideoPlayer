@@ -18,18 +18,16 @@
 #import "MCSResourceSubclass.h"
 #import "MCSVODMetaDataReader.h"
 #import "MCSVODNetworkDataReader.h"
+#import "MCSQueue.h"
 
-@interface MCSVODReader ()<NSLocking, MCSResourceDataReaderDelegate, MCSVODMetaDataReaderDelegate> {
-    dispatch_semaphore_t _semaphore;
-}
-
+@interface MCSVODReader ()<MCSResourceDataReaderDelegate, MCSVODMetaDataReaderDelegate>
 @property (nonatomic) BOOL isCalledPrepare;
 @property (nonatomic) BOOL isPrepared;
 @property (nonatomic) BOOL isClosed;
 
 @property (nonatomic) NSInteger currentIndex;
 @property (nonatomic, strong, readonly, nullable) id<MCSResourceDataReader> currentReader;
-@property (nonatomic) NSUInteger offset;
+@property (nonatomic) NSUInteger readLength;
 
 @property (nonatomic, weak, nullable) MCSVODResource *resource;
 @property (nonatomic, strong) NSURLRequest *request;
@@ -50,12 +48,10 @@
         _networkTaskPriority = 1.0;
         
         _readWriteContents = NSMutableArray.array;
-        _semaphore = dispatch_semaphore_create(1);
         _currentIndex = NSNotFound;
 
         _resource = resource;
         _request = request;
-        _offset = _request.mcs_range.location;
         
         [_resource readWrite_retain];
         [MCSResourceManager.shared reader:self willReadResource:_resource];
@@ -80,25 +76,28 @@
 
 - (void)didRemoveResource:(NSNotification *)note {
     MCSResource *resource = note.userInfo[MCSResourceManagerUserInfoResourceKey];
-    if ( resource == _resource && !self.isClosed )  {
-        [self lock];
-        [self _onError:[NSError mcs_removedResource:self.request.URL]];
-        [self unlock];
+    if ( resource == _resource )  {
+        dispatch_barrier_sync(MCSReaderQueue(), ^{
+            if ( _isClosed )
+                return;
+            [self _onError:[NSError mcs_removedResource:_request.URL]];
+        });
     }
 }
 
 - (void)userCancelledReading:(NSNotification *)note {
     MCSResource *resource = note.userInfo[MCSResourceManagerUserInfoResourceKey];
-    if ( resource == _resource && !self.isClosed )  {
-        [self lock];
-        [self _onError:[NSError mcs_userCancelledError:_request.URL]];
-        [self unlock];
+    if ( resource == _resource )  {
+        dispatch_barrier_sync(MCSReaderQueue(), ^{
+            if ( _isClosed )
+                return;
+            [self _onError:[NSError mcs_removedResource:_request.URL]];
+        });
     }
 }
 
 - (void)prepare {
-    [self lock];
-    @try {
+    dispatch_barrier_sync(MCSReaderQueue(), ^{
         if ( _isClosed || _isCalledPrepare )
             return;
         
@@ -107,103 +106,114 @@
         _isCalledPrepare = YES;
         
         if ( _resource.totalLength == 0 || _resource.pathExtension.length == 0 ) {
-            _metaDataReader = [MCSVODMetaDataReader.alloc initWithRequest:_request delegate:self delegateQueue:_resource.readerOperationQueue];
+            NSURL *URL = [MCSURLRecognizer.shared URLWithProxyURL:_request.URL];
+            _metaDataReader = [MCSVODMetaDataReader.alloc initWithRequest:[_request mcs_requestWithRedirectURL:URL] delegate:self];
             return;
         }
         
         [self _prepare];
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    });
 }
 
 - (NSData *)readDataOfLength:(NSUInteger)length {
-    [self lock];
-    @try {
-        if ( _isClosed || _currentIndex == NSNotFound || !self.currentReader.isPrepared )
-            return nil;
+    __block NSData *data = nil;
+    dispatch_barrier_sync(MCSReaderQueue(), ^{
+        if ( _isClosed )
+            return;
         
-        NSData *data = [self.currentReader readDataOfLength:length];
-        _offset += data.length;
-        if ( _readDataDecoder != nil ) data = _readDataDecoder(_request, _offset, data);
-        return data;
-    } @catch (__unused NSException *exception) {
+        id<MCSResourceDataReader> currentReader = self.currentReader;
+        if ( !currentReader.isPrepared )
+            return;
         
-    } @finally {
-        if ( self.currentReader.isDone ) {
-            if ( self.currentReader != _readers.lastObject ) {
-                [self _prepareNextReader];
-            }
-            else {
+        data = [currentReader readDataOfLength:length];
+        NSUInteger readLength = data.length;
+        if ( _readDataDecoder != nil )
+            data = _readDataDecoder(_request, _response.contentRange.location + _readLength, data);
+        _readLength += readLength;
+        
+        if ( currentReader.isDone ) {
+            currentReader != _readers.lastObject ? [self _prepareNextReader] : [self _close];
+#ifdef DEBUG
+            if ( currentReader == _readers.lastObject ) {
                 MCSLog(@"%@: <%p>.done { range: %@ };\n", NSStringFromClass(self.class), self, NSStringFromRange(_request.mcs_range));
-                [self _close];
             }
+#endif
         }
-        [self unlock];
-    }
+    });
+    return data;
 }
 
+- (BOOL)seekToOffset:(NSUInteger)offset {
+    __block BOOL result = NO;
+    dispatch_barrier_sync(MCSReaderQueue(), ^{
+        if ( _isClosed || !_isPrepared  )
+            return;
+
+        for ( id<MCSResourceDataReader> reader in _readers ) {
+            if ( NSLocationInRange(offset - 1, reader.range) ) {
+                result = [reader seekToOffset:offset];
+                return;
+            }
+        }
+    });
+    return result;
+}
+
+#pragma mark -
+
 - (id<MCSResourceResponse>)response {
-    [self lock];
-    @try {
-        return _response;
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    __block id<MCSResourceResponse> response;
+    dispatch_sync(MCSReaderQueue(), ^{
+        response = _response;
+    });
+    return response;
+}
+
+- (NSUInteger)availableLength {
+    __block NSUInteger availableLength;
+    dispatch_sync(MCSReaderQueue(), ^{
+        id<MCSResourceDataReader> currentReader = self.currentReader;
+        availableLength = currentReader.range.location + currentReader.availableLength;
+    });
+    return availableLength;
 }
  
 - (NSUInteger)offset {
-    [self lock];
-    @try {
-        return _offset;
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    __block NSUInteger offset = 0;
+    dispatch_sync(MCSReaderQueue(), ^{
+        offset = _response.contentRange.location + _readLength;
+    });
+    return offset;
 }
 
 - (BOOL)isPrepared {
-    [self lock];
-    @try {
-        return _isPrepared;
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    __block BOOL isPrepared = NO;
+    dispatch_sync(MCSReaderQueue(), ^{
+        isPrepared = _isPrepared;
+    });
+    return isPrepared;
 }
 
 - (BOOL)isReadingEndOfData {
-    [self lock];
-    @try {
-        return _readers.lastObject.isDone;
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    __block BOOL isDone = NO;
+    dispatch_sync(MCSReaderQueue(), ^{
+        isDone = _readers.lastObject.isDone;
+    });
+    return isDone;
 }
 
 - (BOOL)isClosed {
-    [self lock];
-    @try {
-        return _isClosed;
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    __block BOOL isClosed = NO;
+    dispatch_sync(MCSReaderQueue(), ^{
+        isClosed = _isClosed;
+    });
+    return isClosed;
 }
 
 - (void)close {
-    [self lock];
-    [self _close];
-    [self unlock];
+    dispatch_barrier_sync(MCSReaderQueue(), ^{
+        [self _close];
+    });
 }
 
 #pragma mark -
@@ -232,9 +242,18 @@
         current.length = totalLength;
     }
     
+    if ( current.location >= totalLength ) {
+        current.location = totalLength - 1;
+    }
+    
+    if ( NSMaxRange(current) >= totalLength ) {
+        current.length = totalLength - current.location;
+    }
+    
     _response = [MCSResourceResponse.alloc initWithServer:_resource.server contentType:_resource.contentType totalLength:totalLength contentRange:current];
 
     NSMutableArray<id<MCSResourceDataReader>> *readers = NSMutableArray.array;
+    NSURL *URL = [MCSURLRecognizer.shared URLWithProxyURL:_request.URL];
     for ( MCSResourcePartialContent *content in contents ) {
         NSRange available = NSMakeRange(content.offset, content.length);
         NSRange intersection = NSIntersectionRange(current, available);
@@ -242,15 +261,15 @@
             // undownloaded part
             NSRange leftRange = NSMakeRange(current.location, intersection.location - current.location);
             if ( leftRange.length != 0 ) {
-                MCSVODNetworkDataReader *reader = [MCSVODNetworkDataReader.alloc initWithResource:_resource request:[_request mcs_requestWithRange:leftRange] networkTaskPriority:_networkTaskPriority delegate:self delegateQueue:_resource.readerOperationQueue];
+                MCSVODNetworkDataReader *reader = [self _networkDataReaderWithURL:URL range:leftRange];
                 [readers addObject:reader];
             }
             
             // downloaded part
             NSRange matchedRange = NSMakeRange(NSMaxRange(leftRange), intersection.length);
             NSRange fileRange = NSMakeRange(matchedRange.location - content.offset, intersection.length);
-            NSString *path = [MCSFileManager getFilePathWithName:content.name inResource:_resource.name];
-            MCSResourceFileDataReader *reader = [MCSResourceFileDataReader.alloc initWithRange:matchedRange path:path readRange:fileRange delegate:self delegateQueue:_resource.readerOperationQueue];
+            NSString *path = [MCSFileManager getFilePathWithName:content.filename inResource:_resource.name];
+            MCSResourceFileDataReader *reader = [MCSResourceFileDataReader.alloc initWithResource:_resource range:matchedRange path:path readRange:fileRange delegate:self];
             [readers addObject:reader];
             
             // retain
@@ -266,7 +285,7 @@
     
     if ( current.length != 0 ) {
         // undownloaded part
-        MCSVODNetworkDataReader *reader = [MCSVODNetworkDataReader.alloc initWithResource:_resource request:[_request mcs_requestWithRange:current] networkTaskPriority:_networkTaskPriority delegate:self delegateQueue:_resource.readerOperationQueue];
+        MCSVODNetworkDataReader *reader = [self _networkDataReaderWithURL:URL range:current];
         [readers addObject:reader];
     }
     
@@ -279,8 +298,6 @@
 }
 
 - (void)_prepareNextReader {
-    [self.currentReader close];
-
     if ( self.currentReader == _readers.lastObject )
         return;
     
@@ -310,26 +327,18 @@
     for ( MCSResourcePartialContent *content in _readWriteContents ) {
         [content readWrite_release];
     }
-    
+     
     _isClosed = YES;
     MCSLog(@"%@: <%p>.close { range: %@ };\n", NSStringFromClass(self.class), self, NSStringFromRange(_request.mcs_range));
-}
-
-#pragma mark -
-
-- (void)lock {
-    dispatch_semaphore_wait(_semaphore, DISPATCH_TIME_FOREVER);
-}
-
-- (void)unlock {
-    dispatch_semaphore_signal(_semaphore);
 }
 
 #pragma mark - MCSVODMetaDataReaderDelegate
 
 - (void)metaDataReader:(MCSVODMetaDataReader *)reader didCompleteWithError:(NSError *_Nullable)error {
-    [self lock];
-    @try {
+    dispatch_barrier_sync(MCSReaderQueue(), ^{
+        if ( _isClosed )
+            return;
+        
         if ( error ) {
             [self _onError:error];
             return;
@@ -338,49 +347,47 @@
         [_resource updateServer:reader.server contentType:reader.contentType totalLength:reader.totalLength pathExtension:reader.pathExtension];
         
         [self _prepare];
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    });
 }
 
 #pragma mark - MCSResourceDataReaderDelegate
 
 - (void)readerPrepareDidFinish:(id<MCSResourceDataReader>)reader {
-    if ( self.isPrepared )
+    if ( self.isPrepared || self.isClosed )
         return;
     
-    [self lock];
-    @try {
+    dispatch_barrier_sync(MCSReaderQueue(), ^{
         _isPrepared = YES;
-        
-        dispatch_async(_resource.readerOperationQueue, ^{
-            [self.delegate readerPrepareDidFinish:self];
-        });
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    });
+    
+    [_delegate readerPrepareDidFinish:self];
 }
 
-- (void)readerHasAvailableData:(id<MCSResourceDataReader>)reader {
-    [self.delegate readerHasAvailableData:self];
+- (void)reader:(id<MCSResourceDataReader>)reader hasAvailableDataWithLength:(NSUInteger)length {
+    [_delegate reader:self hasAvailableDataWithLength:length];
 }
 
 - (void)reader:(id<MCSResourceDataReader>)reader anErrorOccurred:(NSError *)error {
-    [self _onError:error];
+    dispatch_barrier_sync(MCSReaderQueue(), ^{
+        [self _onError:error];
+    });
 }
 
 - (void)_onError:(NSError *)error {
+    if ( _isClosed )
+        return;
+    
     [self _close];
     
-    dispatch_async(_resource.readerOperationQueue, ^{
-        
-        MCSLog(@"%@: <%p>.error { error: %@ };\n", NSStringFromClass(self.class), self, error);
-
-        [self.delegate reader:self anErrorOccurred:error];
+    MCSLog(@"%@: <%p>.error { error: %@ };\n", NSStringFromClass(self.class), self, error);
+    
+    dispatch_async(MCSDelegateQueue(), ^{
+        [self->_delegate reader:self anErrorOccurred:error];
     });
+}
+
+- (MCSVODNetworkDataReader *)_networkDataReaderWithURL:(NSURL *)URL range:(NSRange)range {
+    NSMutableURLRequest *request = [_request mcs_requestWithRedirectURL:URL range:range];
+    return [MCSVODNetworkDataReader.alloc initWithResource:_resource request:request networkTaskPriority:_networkTaskPriority delegate:self];
 }
 @end

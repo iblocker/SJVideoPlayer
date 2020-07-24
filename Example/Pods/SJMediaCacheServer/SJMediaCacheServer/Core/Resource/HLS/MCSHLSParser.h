@@ -12,20 +12,19 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @interface MCSHLSParser : NSObject
-- (instancetype)initWithURL:(NSURL *)URL inResource:(NSString *)resourceName delegate:(id<MCSHLSParserDelegate>)delegate delegateQueue:(dispatch_queue_t)queue;
+- (instancetype)initWithResource:(NSString *)resourceName request:(NSURLRequest *)request networkTaskPriority:(float)networkTaskPriority delegate:(id<MCSHLSParserDelegate>)delegate;
 
 - (void)prepare;
 
 - (void)close;
 
 @property (nonatomic, copy, readonly) NSString *resourceName;
-@property (nonatomic, readonly) NSUInteger tsCount;
+@property (nonatomic, copy, readonly) NSString *indexFilePath;
+@property (nonatomic, readonly) NSUInteger TsCount;
 @property (nonatomic, readonly) BOOL isClosed;
 @property (nonatomic, readonly) BOOL isDone;
 
-@property (nonatomic, copy, readonly) NSString *indexFilePath;
-- (NSURL *)tsURLWithTsName:(NSString *)tsName;
-- (nullable NSString *)tsNameAtIndex:(NSUInteger)index;
+- (nullable NSString *)URIAtIndex:(NSUInteger)index;
 @end
 
 

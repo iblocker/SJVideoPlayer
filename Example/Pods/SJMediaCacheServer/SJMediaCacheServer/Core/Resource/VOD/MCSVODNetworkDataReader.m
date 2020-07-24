@@ -14,10 +14,10 @@
 #import "MCSLogger.h"
 #import "MCSVODResource.h"
 #import "MCSUtils.h"
+#import "NSFileHandle+MCS.h"
+#import "MCSQueue.h"
 
-@interface MCSVODNetworkDataReader ()<MCSDownloadTaskDelegate> {
-    dispatch_semaphore_t _semaphore;
-}
+@interface MCSVODNetworkDataReader ()<MCSDownloadTaskDelegate>
 @property (nonatomic, weak, nullable) MCSVODResource *resource;
 @property (nonatomic, strong) NSURLRequest *request;
 @property (nonatomic) NSRange range;
@@ -32,20 +32,20 @@
 @property (nonatomic) BOOL isPrepared;
 @property (nonatomic) BOOL isClosed;
 @property (nonatomic) BOOL isDone;
+@property (nonatomic) BOOL isSought;
 
 @property (nonatomic, strong, nullable) MCSResourcePartialContent *content;
-@property (nonatomic) NSUInteger downloadedLength;
-@property (nonatomic) NSUInteger offset;
+@property (nonatomic) NSUInteger availableLength;
+@property (nonatomic) NSUInteger readLength;
 
 @property (nonatomic) float networkTaskPriority;
 @end
 
 @implementation MCSVODNetworkDataReader
 @synthesize delegate = _delegate;
-@synthesize delegateQueue = _delegateQueue;
 @synthesize isPrepared = _isPrepared;
 
-- (instancetype)initWithResource:(__weak MCSVODResource *)resource request:(NSURLRequest *)request networkTaskPriority:(float)networkTaskPriority delegate:(id<MCSResourceDataReaderDelegate>)delegate delegateQueue:(dispatch_queue_t)queue {
+- (instancetype)initWithResource:(__weak MCSVODResource *)resource request:(NSURLRequest *)request networkTaskPriority:(float)networkTaskPriority delegate:(id<MCSResourceDataReaderDelegate>)delegate {
     self = [super init];
     if ( self ) {
         _resource = resource;
@@ -53,8 +53,6 @@
         _range = request.mcs_range;
         _networkTaskPriority = networkTaskPriority;
         _delegate = delegate;
-        _delegateQueue = queue;
-        _semaphore = dispatch_semaphore_create(1);
     }
     return self;
 }
@@ -64,8 +62,7 @@
 }
 
 - (void)prepare {
-    [self lock];
-    @try {
+    dispatch_barrier_sync(MCSVODNetworkDataReaderQueue(), ^{
         if ( _isClosed || _isCalledPrepare )
             return;
         
@@ -73,82 +70,105 @@
         
         _isCalledPrepare = YES;
         
-        _task = [MCSDownload.shared downloadWithRequest:_request priority:_networkTaskPriority delegate:self];
-    } @catch (__unused NSException *exception) {
-
-    } @finally {
-        [self unlock];
-    }
+        _task = [MCSDownload.shared downloadWithRequest:[_request mcs_requestWithHTTPAdditionalHeaders:[_resource.configuration HTTPAdditionalHeadersForDataRequestsOfType:MCSDataTypeVOD]] priority:_networkTaskPriority delegate:self];
+    });
 }
 
 - (nullable NSData *)readDataOfLength:(NSUInteger)lengthParam {
-    [self lock];
-    @try {
-        if ( _isClosed || _isDone || !_isPrepared )
-            return nil;
-        
-        NSData *data = nil;
-        
-        if ( _offset < _downloadedLength ) {
-            NSUInteger length = MIN(lengthParam, _downloadedLength - _offset);
-            if ( length > 0 ) {
-                data = [_reader readDataOfLength:length];
-
-                MCSLog(@"%@: <%p>.read { offset: %lu, length: %lu };\n", NSStringFromClass(self.class), self, (unsigned long)_offset, (unsigned long)data.length);
-
-                _offset += data.length;
-                _isDone = _offset == _range.length;
+    __block NSData *data = nil;
+    dispatch_barrier_sync(MCSVODNetworkDataReaderQueue(), ^{
+        @try {
+            if ( _isClosed || _isDone || !_isPrepared )
+                return;
+            
+            if ( _isSought ) {
+                _isSought = NO;
+                NSError *error = nil;
+                if ( ![_reader mcs_seekToFileOffset:_readLength error:&error] ) {
+                    [self _onError:error];
+                    return;
+                }
             }
-        }
-        return data;
-    } @catch (NSException *exception) {
-        [self _onError:[NSError mcs_exception:exception]];
-    }
-    @finally {
+            
+            data = [_reader readDataOfLength:lengthParam];
+            NSUInteger readLength = data.length;
+            if ( readLength == 0 )
+                return;
+            
+            _readLength += readLength;
+            _isDone = (_readLength == _range.length);
+            
 #ifdef DEBUG
-        if ( _isDone ) {
-            MCSLog(@"%@: <%p>.done { range: %@ };\n", NSStringFromClass(self.class), self, NSStringFromRange(_range));
-        }
+            MCSLog(@"%@: <%p>.read { offset: %lu, length: %lu };\n", NSStringFromClass(self.class), self, (unsigned long)(_range.location + _readLength), (unsigned long)readLength);
+            if ( _isDone ) {
+                MCSLog(@"%@: <%p>.done { range: %@ };\n", NSStringFromClass(self.class), self, NSStringFromRange(_range));
+            }
 #endif
-        [self unlock];
-    }
+        } @catch (NSException *exception) {
+            [self _onError:[NSError mcs_exception:exception]];
+        }
+    });
+    return data;
+}
+
+- (BOOL)seekToOffset:(NSUInteger)offset {
+    __block BOOL result = NO;
+    dispatch_barrier_sync(MCSVODNetworkDataReaderQueue(), ^{
+        if ( _isClosed || !_isPrepared )
+            return;
+        
+        NSRange range = NSMakeRange(_range.location, _availableLength);
+        if ( !NSLocationInRange(offset - 1, range) )
+            return;
+        
+        // offset   = range.location + readLength;
+        NSUInteger readLength = offset - range.location;
+        if ( readLength != _readLength ) {
+            _isSought = YES;
+            _readLength = readLength;
+            _isDone = (_readLength == _range.length);
+        }
+        result = YES;
+    });
+    return result;
 }
 
 - (void)close {
-    [self lock];
-    [self _close];
-    [self unlock];
+    dispatch_barrier_sync(MCSVODNetworkDataReaderQueue(), ^{
+        [self _close];
+    });
 }
 
 #pragma mark -
 
+- (NSUInteger)offset {
+    __block NSUInteger offset = 0;
+    dispatch_sync(MCSVODNetworkDataReaderQueue(), ^{
+        offset = _range.location + _readLength;
+    });
+    return offset;
+}
+
 - (BOOL)isPrepared {
-    [self lock];
-    @try {
-        return _isPrepared;
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    __block BOOL isPrepared = NO;
+    dispatch_sync(MCSVODNetworkDataReaderQueue(), ^{
+        isPrepared = _isPrepared;
+    });
+    return isPrepared;
 }
 
 - (BOOL)isDone {
-    [self lock];
-    @try {
-        return _isDone;
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    __block BOOL isDone = NO;
+    dispatch_sync(MCSVODNetworkDataReaderQueue(), ^{
+        isDone = _isDone;
+    });
+    return isDone;
 }
 
 #pragma mark - MCSDownloadTaskDelegate
 
 - (void)downloadTask:(NSURLSessionTask *)task didReceiveResponse:(NSHTTPURLResponse *)response {
-    [self lock];
-    @try {
+    dispatch_barrier_sync(MCSVODNetworkDataReaderQueue(), ^{
         if ( _isClosed )
             return;
         _response = response;
@@ -156,7 +176,7 @@
         NSString *filePath = [_resource filePathOfContent:_content];
         _reader = [NSFileHandle fileHandleForReadingAtPath:filePath];
         _writer = [NSFileHandle fileHandleForWritingAtPath:filePath];
-
+        
         if ( _reader == nil || _writer == nil ) {
             [self _onError:[NSError mcs_fileNotExistError:_request.URL]];
             return;
@@ -164,40 +184,39 @@
         
         _isPrepared = YES;
         
-        dispatch_async(_delegateQueue, ^{
-            [self.delegate readerPrepareDidFinish:self];
+        dispatch_async(MCSDelegateQueue(), ^{
+            [self->_delegate readerPrepareDidFinish:self];
         });
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    });
 }
 
 - (void)downloadTask:(NSURLSessionTask *)task didReceiveData:(NSData *)data {
-    [self lock];
-    @try {
-        if ( _isClosed )
-            return;
-
-        [_writer writeData:data];
-        NSUInteger length = data.length;
-        _downloadedLength += length;
-        [_content didWriteDataWithLength:length];
-     
-        dispatch_async(_delegateQueue, ^{
-            [self.delegate readerHasAvailableData:self];
-        });
-    } @catch (NSException *exception) {
-        [self _onError:[NSError mcs_exception:exception]];
-    } @finally {
-           [self unlock];
-    }
+    dispatch_barrier_sync(MCSVODNetworkDataReaderQueue(), ^{
+        @try {
+            if ( _isClosed )
+                return;
+            
+            if ( _resource == nil ) {
+                [self _close];
+                return;
+            }
+            
+            [_writer writeData:data];
+            NSUInteger length = data.length;
+            _availableLength += length;
+            [_content didWriteDataWithLength:length];
+            
+            dispatch_async(MCSDelegateQueue(), ^{
+                [self->_delegate reader:self hasAvailableDataWithLength:length];
+            });
+        } @catch (NSException *exception) {
+            [self _onError:[NSError mcs_exception:exception]];
+        }
+    });
 }
 
 - (void)downloadTask:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
-    [self lock];
-    @try {
+    dispatch_barrier_sync(MCSVODNetworkDataReaderQueue(), ^{
         if ( _isClosed )
             return;
         
@@ -207,11 +226,7 @@
         //    else {
         //        // finished download
         //    }
-    } @catch (__unused NSException *exception) {
-        
-    } @finally {
-        [self unlock];
-    }
+    });
 }
 
 #pragma mark -
@@ -219,8 +234,8 @@
 - (void)_onError:(NSError *)error {
     [self _close];
     
-    dispatch_async(_delegateQueue, ^{
-        [self.delegate reader:self anErrorOccurred:error];
+    dispatch_async(MCSDelegateQueue(), ^{
+        [self->_delegate reader:self anErrorOccurred:error];
     });
 }
 
@@ -242,15 +257,5 @@
     } @catch (__unused NSException *exception) {
         
     }
-}
-
-#pragma mark -
-
-- (void)lock {
-    dispatch_semaphore_wait(_semaphore, DISPATCH_TIME_FOREVER);
-}
-
-- (void)unlock {
-    dispatch_semaphore_signal(_semaphore);
 }
 @end
