@@ -36,13 +36,25 @@ NS_ASSUME_NONNULL_BEGIN
 - (instancetype)initWithFrame:(CGRect)frame {
     self = [super initWithFrame:frame];
     if ( self ) {
-        _margin = 28;
-        _scrollEnabled = YES;
-        self.clipsToBounds = YES;
-        [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(_reset) name:UIApplicationWillEnterForegroundNotification object:nil];
-        [self _setupViews];
+        [self _init];
     }
     return self;
+}
+
+- (nullable instancetype)initWithCoder:(NSCoder *)coder {
+    self = [super initWithCoder:coder];
+    if (self) {
+        [self _init];
+    }
+    return self;
+}
+
+- (void)_init {
+    _margin = 28;
+    _scrollEnabled = YES;
+    self.clipsToBounds = YES;
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(_reset) name:UIApplicationWillEnterForegroundNotification object:nil];
+    [self _setupViews];
 }
 
 - (void)dealloc {
@@ -139,6 +151,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)_prepareForAnimation {
     [self _setRightFadeMask];
     
+    if ( _centered ) {
+        _leftLabel.sj_x = 0;
+    }
+    
     _rightLabel.hidden = NO;
     _rightLabel.attributedText = _leftLabel.attributedText;
     _rightLabel.sj_x = _leftLabel.sj_w + _margin;
@@ -151,6 +167,10 @@ NS_ASSUME_NONNULL_BEGIN
     [self _removeFadeMasks];
     
     _rightLabel.hidden = YES;
+    
+    if ( _centered ) {
+        _leftLabel.sj_x = self.sj_w * 0.5 - _leftLabel.sj_w * 0.5;
+    }
 }
 
 - (void)_startAnimationIfNeededAfterDelay:(NSTimeInterval)seconds {

@@ -97,6 +97,7 @@ NS_ASSUME_NONNULL_BEGIN
     [self seekToTime:kCMTimeZero completionHandler:^(BOOL finished) {
         __strong typeof(_self) self = _self;
         if ( !self ) return;
+        [self _postNotification:SJMediaPlayerDidReplayNotification];
         [self play];
     }];
 }
@@ -130,6 +131,16 @@ NS_ASSUME_NONNULL_BEGIN
     [self _postNotification:SJMediaPlayerDurationDidChangeNotification];
     [self _postNotification:SJMediaPlayerPlayableDurationDidChangeNotification];
     [self _postNotification:SJMediaPlayerPlaybackTypeDidChangeNotification];
+}
+
+- (nullable NSError *)error {
+    if ( _innerError != nil )
+        return _innerError;
+    if ( _avPlayer.currentItem.error != nil )
+        return _avPlayer.currentItem.error;
+    if ( _avPlayer.error != nil )
+        return _avPlayer.error;
+    return nil;
 }
 
 #pragma mark -
@@ -397,7 +408,7 @@ static NSString *kTimeControlStatus = @"timeControlStatus";
         
         if ( self.needSeekToStartPosition && !self.seekingInfo.isSeeking && assetStatus == SJAssetStatusReadyToPlay ) {
             __weak typeof(self) _self = self;
-            [self seekToTime:CMTimeMakeWithSeconds(self.startPosition, NSEC_PER_SEC) completionHandler:^(BOOL finished) {
+            [self seekToTime:CMTimeMakeWithSeconds(self.startPosition, NSEC_PER_SEC) toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero completionHandler:^(BOOL f) {
                 __strong typeof(_self) self = _self;
                 if ( !self ) return;
                 self.needSeekToStartPosition = NO;
@@ -544,15 +555,6 @@ static NSString *kTimeControlStatus = @"timeControlStatus";
         self.finishedReason = SJFinishedReasonToTrialEndPosition;
         self.isPlaybackFinished = YES;
         [self pause];
-    }
-}
-
-- (void)_didPlayToEndPositoion {
-    if ( self.finishedReason != SJFinishedReasonToEndTimePosition ) {
-        self.finishedReason = SJFinishedReasonToEndTimePosition;
-        self.isPlaybackFinished = YES;
-        self.reasonForWaitingToPlay = nil;
-        self.timeControlStatus = SJPlaybackTimeControlStatusPaused;
     }
 }
 

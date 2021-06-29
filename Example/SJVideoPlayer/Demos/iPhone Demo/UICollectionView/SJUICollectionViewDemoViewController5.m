@@ -22,7 +22,7 @@
     [self _setupViews];
     
     // 开启滑动自动播放
-    SJPlayerAutoplayConfig *config = [SJPlayerAutoplayConfig configWithAutoplayDelegate:self];
+    SJPlayerAutoplayConfig *config = [SJPlayerAutoplayConfig configWithPlayerSuperviewSelector:NSSelectorFromString(@"coverImageView") autoplayDelegate:self];
     config.autoplayPosition = SJAutoplayPositionMiddle; // 播放距离中线最近的视频
     [self.collectionView sj_enableAutoplayWithConfig:config];
 }
@@ -39,7 +39,7 @@
         _player = [SJVideoPlayer player];
     }
     
-    _player.URLAsset = [[SJVideoPlayerURLAsset alloc] initWithURL:vm.url playModel:[SJPlayModel playModelWithCollectionView:_collectionView indexPath:indexPath]];
+    _player.URLAsset = [[SJVideoPlayerURLAsset alloc] initWithURL:vm.url playModel:[SJPlayModel playModelWithCollectionView:_collectionView indexPath:indexPath superviewSelector:NSSelectorFromString(@"coverImageView")]];
     _player.URLAsset.title = vm.mediaTitle.string;
 }
 
@@ -127,5 +127,9 @@
  
 - (BOOL)prefersHomeIndicatorAutoHidden {
     return YES;
+}
+
+- (BOOL)shouldAutorotate {
+    return NO;
 }
 @end

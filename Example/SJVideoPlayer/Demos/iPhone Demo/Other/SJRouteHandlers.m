@@ -17,7 +17,7 @@
 #import "SJUITableViewDemoViewController6.h"
 #import "SJUITableViewDemoViewController7.h"
 #import "SJUITableViewDemoViewController8.h"
-#import "SJUITableViewDemoViewController9.h"
+#import "SJFloatModeDemoViewController2.h"
 
 #import "SJUICollectionViewDemoViewController1.h"
 #import "SJUICollectionViewDemoViewController2.h"
@@ -28,8 +28,12 @@
 #import "SJKeyboardDemoViewController1.h"
 
 #import "SJDYMainViewController.h"
+#import "DYHPlaybackListViewController.h"
 
 #import "SJUIScrollViewDemoViewController1.h"
+#import "SJUIScrollViewDemoViewController2.h"
+
+#import "SJFloatModeDemoViewController1.h"
 
 @implementation SJRouteHandlers
 + (void)addRoutesToRouter:(SJRouter *)router {
@@ -39,6 +43,7 @@
         }
     };
     
+    addBlock([self routeObjectArrayForFloatModeDemo]);
     addBlock([self routeObjectArrayForUIScrollViewDemo]);
     addBlock([self routeObjectArrayForDYDemo]);
     addBlock([self routeObjectArrayForUITableViewDemo]);
@@ -46,10 +51,27 @@
     addBlock([self routeObjectArrayForKeyboardDemo]);
 }
 
++ (NSArray<SJRouteObject *> *)routeObjectArrayForFloatModeDemo {
+    return @[
+        [SJRouteObject.alloc initWithPath:@"FloatMode/1" transitionMode:SJViewControllerTransitionModeNavigation createInstanceBlock:^(SJRouteRequest * _Nonnull request, SJCompletionHandler  _Nullable completionHandler) {
+            __auto_type vc = [SJFloatModeDemoViewController1 viewControllerWithVideoId:10];
+            if ( completionHandler ) completionHandler(vc, nil);
+        }],
+        [SJRouteObject.alloc initWithPath:@"FloatMode/2" transitionMode:SJViewControllerTransitionModeNavigation createInstanceBlock:^(SJRouteRequest * _Nonnull request, SJCompletionHandler  _Nullable completionHandler) {
+            __auto_type vc = SJFloatModeDemoViewController2.new;
+            if ( completionHandler ) completionHandler(vc, nil);
+        }]
+    ];
+}
+
 + (NSArray<SJRouteObject *> *)routeObjectArrayForUIScrollViewDemo {
     return @[
         [SJRouteObject.alloc initWithPath:@"UIScrollView/1" transitionMode:SJViewControllerTransitionModeNavigation createInstanceBlock:^(SJRouteRequest * _Nonnull request, SJCompletionHandler  _Nullable completionHandler) {
             __auto_type vc = SJUIScrollViewDemoViewController1.new;
+            if ( completionHandler ) completionHandler(vc, nil);
+        }],
+        [SJRouteObject.alloc initWithPath:@"UIScrollView/2" transitionMode:SJViewControllerTransitionModeNavigation createInstanceBlock:^(SJRouteRequest * _Nonnull request, SJCompletionHandler  _Nullable completionHandler) {
+            __auto_type vc = SJUIScrollViewDemoViewController2.new;
             if ( completionHandler ) completionHandler(vc, nil);
         }],
     ];
@@ -59,6 +81,10 @@
     return @[
         [SJRouteObject.alloc initWithPath:@"dy/1" transitionMode:SJViewControllerTransitionModeNavigation createInstanceBlock:^(SJRouteRequest * _Nonnull request, SJCompletionHandler  _Nullable completionHandler) {
             __auto_type vc = SJDYMainViewController.new;
+            if ( completionHandler ) completionHandler(vc, nil);
+        }],
+        [SJRouteObject.alloc initWithPath:@"dy/2" transitionMode:SJViewControllerTransitionModeNavigation createInstanceBlock:^(SJRouteRequest * _Nonnull request, SJCompletionHandler  _Nullable completionHandler) {
+            __auto_type vc = DYHPlaybackListViewController.new;
             if ( completionHandler ) completionHandler(vc, nil);
         }],
     ];
@@ -132,12 +158,7 @@
         [SJRouteObject.alloc initWithPath:@"UITableViewDemo/8" transitionMode:SJViewControllerTransitionModeNavigation createInstanceBlock:^(SJRouteRequest * _Nonnull request, SJCompletionHandler  _Nullable completionHandler) {
             __auto_type vc = SJUITableViewDemoViewController8.new;
             if ( completionHandler ) completionHandler(vc, nil);
-        }],
-        [SJRouteObject.alloc initWithPath:@"UITableViewDemo/9" transitionMode:SJViewControllerTransitionModeNavigation createInstanceBlock:^(SJRouteRequest * _Nonnull request, SJCompletionHandler  _Nullable completionHandler) {
-            __auto_type vc = SJUITableViewDemoViewController9.new;
-            if ( completionHandler ) completionHandler(vc, nil);
-        }],
-
+        }]
     ];
 }
 

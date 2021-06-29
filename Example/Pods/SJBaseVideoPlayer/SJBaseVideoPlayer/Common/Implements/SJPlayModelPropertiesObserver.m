@@ -66,6 +66,7 @@ NS_ASSUME_NONNULL_BEGIN
          [_playModel isKindOfClass:SJTableViewTableFooterViewPlayModel.class]  ) {
         
         SJPlayModel *curr = _playModel;
+        _beforeOffset = curr.inScrollView.contentOffset;
         while ( curr != nil ) {
             [self _observeScrollView:curr.inScrollView];
             curr = curr.nextPlayModel;
@@ -149,7 +150,7 @@ static NSString *kState = @"state";
 }
 
 - (BOOL)_isAppearedInTheScrollingView:(UIScrollView *)scrollView {
-    return [scrollView isViewAppeared:_playModel.playerSuperview];
+    return [scrollView isViewAppeared:_playModel.playerSuperview insets:_playModel.playableAreaInsets];
 }
 
 - (void)_scrollViewDidScroll:(UIScrollView *)scrollView {

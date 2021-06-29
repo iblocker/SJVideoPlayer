@@ -10,20 +10,156 @@
 @protocol SJPlayModelPlayerSuperview, SJPlayModelNestedView;
 
 NS_ASSUME_NONNULL_BEGIN
-/// 用于标识: 播放器父视图. 父视图需遵守该协议. 将来播放器视图会被管理类自动添加到此视图中.
-@protocol SJPlayModelPlayerSuperview
-
-@end
-
-/// 用于标识: 嵌套的视图. 在嵌套场景中, 嵌套的视图需遵守该协议. 管理类将通过这条链一层一层找到父视图.
-/// 例如: UITableViewCell 中内嵌的一个 UICollectionView<SJPlayModelNestedView>, 播放器将来要在 UICollectionViewCell 中的某个视图上播放.
-///      由于`tableView`以及`collectionView`都存在复用的情况, 因此需要添加该标记建立视图层次链. 管理类通过这条链来定位具体位置.
-@protocol SJPlayModelNestedView
-
-@end
-
-
 @interface SJPlayModel: NSObject
+/**
+ The selector of `playerSuperView`, the playModel will be get superview through the selector.
+ 
+ \code
+    /// case 1:
+    ///
+    /// `playerSuperView` => UICollectionViewCell => UICollectionView
+    ///
+    /// The selector is @selector(playerSuperview);
+    @interface YourCollectionViewCell ()
+    @property (nonatomic, strong) UIView *playerSuperview;
+    @end
+ 
+    /// case 2:
+    ///
+    /// `playerSuperview` => UITableViewCell => UITableView
+    ///
+    /// The selector is @selector(playerSuperview2);
+    @interface YourTableViewCell ()
+    @property (nonatomic, strong) UIView *playerSuperview2;
+    @end
+
+    /// case 3:
+    ///
+    /// `playerSuperview` => UIScrollView
+    ///
+    /// The selector is @selector(playerSuperview);
+    @interface YourScrollView ()
+    @property (nonatomic, strong) UIView *playerSuperview;
+    @end
+ 
+    /// case 4:
+    ///
+    /// `playerSuperview` => TableHeaderView
+    ///
+    /// The selector is @selector(playerSuperview);
+    @interface YourTableHeaderView ()
+    @property (nonatomic, strong) UIView *playerSuperview;
+    @end
+    _tableView.tableHeaderView = YourTableHeaderView;
+ 
+    /// case 5:
+    ///
+    /// `playerSuperview` => TableViewSectionHeaderFooterView
+    ///
+    /// The selector is @selector(playerSuperview);
+    @interface YourTableViewSectionHeaderFooterView
+    @property (nonatomic, strong) UIView *playerSuperview;
+    @end
+    - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+        return YourTableViewSectionHeaderFooterView;
+    }
+
+    /// more ..
+
+ \endcode
+ */
+@property (nonatomic, nullable) SEL superviewSelector;
+
+/**
+ The nextPlayModel is used in nested view hierarchy. Specify nested view with `scrollViewSelector`.
+ 
+ \code
+    // view hierarchy case 1:
+    //
+    // `playerSuperView`(1) => UICollectionViewCell(2) => `UICollectionView(nested view)`(3) => UICollectionViewCell(4) => UICollectionView(5)
+    @interface YourCollectionViewCell () // (2)
+    @property (nonatomic, strong) UIView *playerSuperview; // (1)
+    @end
+
+    @interface YourCollectionViewCell () // (4)
+    @property (nonatomic, strong) UICollectionView *collectionView; // (3)
+    @end
+ 
+    SJPlayModel *next = [SJPlayModel playModelWithCollectionView:(5) indexPath:indexPath for (4)];
+    next.scrollViewSelector = @selector(collectionView); // (3)
+
+    SJPlayModel *one = [SJPlayModel playModelWithCollectionView:(3) indexPath:indexPath for (2)];
+    one.superviewSelector = @selector(playerSuperview); // (1)
+    one.nextPlayModel = next;
+ 
+    // view hierarchy case 2:
+    //
+    // `playerSuperView`(1) => UICollectionViewCell(2) => `UICollectionView(nested view)`(3) => UITableViewCell(4) => UITableView(5)
+    @interface YourCollectionViewCell () // (2)
+    @property (nonatomic, strong) UIView *playerSuperview; // (1)
+    @end
+
+    @interface YourTableViewCell () // (4)
+    @property (nonatomic, strong) UICollectionView *collectionView; // (3)
+    @end
+
+    SJPlayModel *next = [SJPlayModel playModelWithTableView:(5) indexPath:indexPath for (4)];
+    next.scrollViewSelector = @selector(collectionView); // (3)
+
+    SJPlayModel *one = [SJPlayModel playModelWithCollectionView:(3) indexPath:indexPath for (2)];
+    one.superviewSelector = @selector(playerSuperview); // (1)
+    one.nextPlayModel = next;
+ \endcode
+*/
+@property (nonatomic, strong, nullable) __kindof SJPlayModel *nextPlayModel;
+
+/**
+ The selector of `scrollView` in the below cases.
+ 
+ \code
+    // view hierarchy case 1:
+    //
+    // `playerSuperView`(1) => UICollectionViewCell(2) => `UICollectionView(nested view)`(3) => UICollectionViewCell(4) => UICollectionView(5)
+    @interface YourCollectionViewCell () // (2)
+    @property (nonatomic, strong) UIView *playerSuperview; // (1)
+    @end
+
+    @interface YourCollectionViewCell () // (4)
+    @property (nonatomic, strong) UICollectionView *collectionView; // (3)
+    @end
+
+    SJPlayModel *next = [SJPlayModel playModelWithCollectionView:(5) indexPath:indexPath for (4)];
+    next.scrollViewSelector = @selector(collectionView); // (3)
+
+    SJPlayModel *one = [SJPlayModel playModelWithCollectionView:(3) indexPath:indexPath for (2)];
+    one.superviewSelector = @selector(playerSuperview); // (1)
+    one.nextPlayModel = next;
+
+    // view hierarchy case 2:
+    //
+    // `playerSuperView`(1) => UICollectionViewCell(2) => `UICollectionView(nested view)`(3) => UITableViewCell(4) => UITableView(5)
+    @interface YourCollectionViewCell () // (2)
+    @property (nonatomic, strong) UIView *playerSuperview; // (1)
+    @end
+
+    @interface YourTableViewCell () // (4)
+    @property (nonatomic, strong) UICollectionView *collectionView; // (3)
+    @end
+
+    SJPlayModel *next = [SJPlayModel playModelWithTableView:(5) indexPath:indexPath for (4)];
+    next.scrollViewSelector = @selector(collectionView); // (3)
+
+    SJPlayModel *one = [SJPlayModel playModelWithCollectionView:(3) indexPath:indexPath for (2)];
+    one.superviewSelector = @selector(playerSuperview); // (1)
+    one.nextPlayModel = next;
+ \endcode
+ */
+@property (nonatomic, nullable) SEL scrollViewSelector;
+
+/// 可播区域的insets
+///
+///
+@property (nonatomic) UIEdgeInsets playableAreaInsets;
 
 #pragma mark - UIView
 
@@ -35,7 +171,8 @@ NS_ASSUME_NONNULL_BEGIN
 ///     - PlayerSuperview<SJPlayModelPlayerSuperview>
 ///         - player
 + (instancetype)playModelWithScrollView:(__weak UIScrollView *)scrollView;
- 
++ (instancetype)playModelWithScrollView:(__weak UIScrollView *)scrollView superviewSelector:(SEL)superviewSelector;
+
 #pragma mark - UITableView
 
 /// - UITableView
@@ -43,30 +180,35 @@ NS_ASSUME_NONNULL_BEGIN
 ///         - PlayerSuperview<SJPlayModelPlayerSuperview>
 ///             - player
 + (instancetype)playModelWithTableView:(__weak UITableView *)tableView indexPath:(NSIndexPath *)indexPath;
++ (instancetype)playModelWithTableView:(__weak UITableView *)tableView indexPath:(NSIndexPath *)indexPath superviewSelector:(SEL)superviewSelector;
 
 /// - UITableView
 ///     - UITableView.TableHeaderView
 ///         - PlayerSuperview<SJPlayModelPlayerSuperview>
 ///             - player
 + (instancetype)playModelWithTableView:(__weak UITableView *)tableView tableHeaderView:(__weak UIView *)tableHeaderView;
++ (instancetype)playModelWithTableView:(__weak UITableView *)tableView tableHeaderView:(__weak UIView *)tableHeaderView superviewSelector:(SEL)superviewSelector;
 
 /// - UITableView
 ///     - UITableView.TableFooterView
 ///         - PlayerSuperview<SJPlayModelPlayerSuperview>
 ///             - player
 + (instancetype)playModelWithTableView:(__weak UITableView *)tableView tableFooterView:(__weak UIView *)tableFooterView;
++ (instancetype)playModelWithTableView:(__weak UITableView *)tableView tableFooterView:(__weak UIView *)tableFooterView superviewSelector:(SEL)superviewSelector;
 
 /// - UITableView
 ///     - UITableViewSectionHeaderView
 ///         - PlayerSuperview<SJPlayModelPlayerSuperview>
 ///             - player
 + (instancetype)playModelWithTableView:(__weak UITableView *)tableView inHeaderForSection:(NSInteger)section;
++ (instancetype)playModelWithTableView:(__weak UITableView *)tableView inHeaderForSection:(NSInteger)section superviewSelector:(SEL)superviewSelector;
 
 /// - UITableView
 ///     - UITableViewSectionFooterView
 ///         - PlayerSuperview<SJPlayModelPlayerSuperview>
 ///             - player
 + (instancetype)playModelWithTableView:(__weak UITableView *)tableView inFooterForSection:(NSInteger)section;
++ (instancetype)playModelWithTableView:(__weak UITableView *)tableView inFooterForSection:(NSInteger)section superviewSelector:(SEL)superviewSelector;
 
 
 #pragma mark - UICollectionView
@@ -76,71 +218,60 @@ NS_ASSUME_NONNULL_BEGIN
 ///         - PlayerSuperview<SJPlayModelPlayerSuperview>
 ///             - player
 + (instancetype)playModelWithCollectionView:(__weak UICollectionView *)collectionView indexPath:(NSIndexPath *)indexPath;
++ (instancetype)playModelWithCollectionView:(__weak UICollectionView *)collectionView indexPath:(NSIndexPath *)indexPath superviewSelector:(SEL)superviewSelector;
 
 /// - UICollectionView
 ///     - UICollectionElementKindSectionHeader
 ///         - PlayerSuperview<SJPlayModelPlayerSuperview>
 ///             - player
 + (instancetype)playModelWithCollectionView:(UICollectionView *__weak)collectionView inHeaderForSection:(NSInteger)section;
++ (instancetype)playModelWithCollectionView:(UICollectionView *__weak)collectionView inHeaderForSection:(NSInteger)section superviewSelector:(SEL)superviewSelector;
 
 /// - UICollectionView
 ///     - UICollectionElementKindSectionFooter
 ///         - PlayerSuperview<SJPlayModelPlayerSuperview>
 ///             - player
 + (instancetype)playModelWithCollectionView:(UICollectionView *__weak)collectionView inFooterForSection:(NSInteger)section;
++ (instancetype)playModelWithCollectionView:(UICollectionView *__weak)collectionView inFooterForSection:(NSInteger)section superviewSelector:(SEL)superviewSelector;
 
+#pragma mark -
 
-#pragma mark - 视图嵌套情况下使用
-
-/**
-  嵌套链.  当存在视图嵌套情况时, 可以通过该方法与`nextPlayModel`建立视图层次链接
- 
- 1. - UITableView
-      - UITableViewHeaderView
-          - UICollectionView<SJPlayModelNestedView>
-              - UICollectionViewCell
-                  - PlayerSuperview<SJPlayModelPlayerSuperview>
-                      - player
- 
- \code
- SJPlayModel *one = [SJPlayModel playModelWithCollectionView:collectionView indexPath:cellIndexPath];
- one.nextPlayModel = [SJPlayModel playModelWithTableView:tableView tableHeaderView:tableHeaderView];
- \endcode
- 
- 2. - UITableView
-      - UITableViewCell1
-          - UICollectionView<SJPlayModelNestedView>
-              - UICollectionViewCell2
-                  - PlayerSuperview<SJPlayModelPlayerSuperview>
-                      - player
-
- \code
- SJPlayModel *one = [SJPlayModel playModelWithCollectionView:collectionView indexPath:cellIndexPath2];
- one.nextPlayModel = [SJPlayModel playModelWithTableView:tableView indexPath:cellIndexPath1];
- \endcode
- 
- 3. - UICollectionView1
-      - UICollectionViewCell1
-          - UICollectionView2<SJPlayModelNestedView>
-              - UICollectionViewCell2
-                  - PlayerSuperview<SJPlayModelPlayerSuperview>
-                      - player
- \code
- SJPlayModel *one = [SJPlayModel playModelWithCollectionView:collectionView2 indexPath:cellIndexPath2];
- one.nextPlayModel = [SJPlayModel playModelWithCollectionView:collectionView1 indexPath:cellIndexPath1];
- \endcode
- */
-@property (nonatomic, strong, nullable) __kindof SJPlayModel *nextPlayModel;
-
-#pragma mark - 
+//@property (nonatomic, readonly) BOOL isPlayInScrollView;
+//@property (nonatomic, readonly, nullable) __kindof UIView<SJPlayModelPlayerSuperview> *superview;
+//@property (nonatomic, readonly, nullable) __kindof UIScrollView *scrollView;
+//@property (nonatomic, strong, readonly, nullable) NSIndexPath *indexPath;
 
 - (BOOL)isPlayInScrollView;
-- (nullable UIView *)playerSuperview;
+- (nullable UIView<SJPlayModelPlayerSuperview> *)playerSuperview;
 - (nullable __kindof UIScrollView *)inScrollView;
 - (nullable NSIndexPath *)indexPath;
+- (NSInteger)section;
+
+/// 视图tag.
+///
+///     当一个界面中, 需要同时存在多个播放器时, 用此tag来进一步区分对应的父视图(请设置`SJPlayModelPlayerSuperview.tag`, 不可为 0)
+///
+///     当多个父视图设置不同的tag后, 管理类将通过此tag来定位对应父视图, 从而实现同一个页面中多个播放器同时播放的效果
+///
+@property (nonatomic) NSUInteger superviewTag __deprecated_msg("use `playModel.superviewSelector`;");
 @end
 
 
+/// 用于标识: 播放器父视图. 父视图需遵守该协议. 将来播放器视图会被管理类自动添加到此视图中.
+/// 已弃用, 已改为通过KVC获取父视图
+__deprecated_msg("use `playModel.superviewSelector`;")
+@protocol SJPlayModelPlayerSuperview 
+
+@end
+
+/// 用于标识: 嵌套的视图. 在嵌套场景中, 嵌套的视图需遵守该协议. 管理类将通过这条链一层一层找到父视图.
+/// 例如: UITableViewCell 中内嵌的一个 UICollectionView<SJPlayModelNestedView>, 播放器将来要在 UICollectionViewCell 中的某个视图上播放.
+///      由于`tableView`以及`collectionView`都存在复用的情况, 因此需要添加该标记建立视图层次链. 管理类通过这条链来定位具体位置.
+/// 已弃用, 已改为通过KVC获取嵌套视图
+__deprecated_msg("use `playModel.nextPlayModel` and `playModel.scrollViewSelector`;")
+@protocol SJPlayModelNestedView
+
+@end
 
 
 
@@ -245,4 +376,8 @@ NS_ASSUME_NONNULL_BEGIN
                                                                          rootCollectionView:(__weak UICollectionView *)rootCollectionView __deprecated_msg("use `nextPlayModel`!");
 @end
 
+@protocol SJPlayerDefaultSelectors <NSObject>
+@property (nonatomic, readonly) id playerSuperview;
+@property (nonatomic, readonly) id collectionView;
+@end
 NS_ASSUME_NONNULL_END

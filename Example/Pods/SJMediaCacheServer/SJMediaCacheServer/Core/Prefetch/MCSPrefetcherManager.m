@@ -6,14 +6,19 @@
 //
 
 #import "MCSPrefetcherManager.h"
-#import "MCSHLSPrefetcher.h"
-#import "MCSVODPrefetcher.h"
-#import "MCSURLRecognizer.h"
+#import "HLSPrefetcher.h"
+#import "FILEPrefetcher.h"
+#import "MCSURL.h"
 
 @interface MCSPrefetchOperation : NSOperation<MCSPrefetchTask>
 - (instancetype)initWithURL:(NSURL *)URL preloadSize:(NSUInteger)bytes progress:(void(^_Nullable)(float progress))progressBlock completed:(void(^_Nullable)(NSError *_Nullable error))completionBlock;
 
+- (instancetype)initWithURL:(NSURL *)URL numberOfPreloadedFiles:(NSUInteger)num progress:(void(^_Nullable)(float progress))progressBlock completed:(void(^_Nullable)(NSError *_Nullable error))completionBlock;
+
+- (instancetype)initWithURL:(NSURL *)URL progress:(void(^_Nullable)(float progress))progressBlock completed:(void(^_Nullable)(NSError *_Nullable error))completionBlock;
+
 @property (nonatomic, readonly) NSUInteger preloadSize;
+@property (nonatomic, readonly) NSUInteger numberOfPreloadedFiles;
 @property (nonatomic, strong, readonly) NSURL *URL;
 @property (nonatomic, copy, readonly, nullable) void(^mcs_progressBlock)(float progress);
 @property (nonatomic, copy, readonly, nullable) void(^mcs_completionBlock)(NSError *_Nullable error);
@@ -22,27 +27,49 @@
 @end
 
 @interface MCSPrefetchOperation ()<MCSPrefetcherDelegate> {
-    dispatch_queue_t _queue;
-    BOOL _isFinished;
+    id<MCSPrefetcher> _prefetcher;
+    BOOL _isPrefetchAllMode;
+    dispatch_semaphore_t _semaphore;
     BOOL _isCancelled;
     BOOL _isExecuting;
-    id<MCSPrefetcher> _prefetcher;
+    BOOL _isFinished;
 }
 @end
 
 @implementation MCSPrefetchOperation
-@synthesize cancelled = _cancelled;
-@synthesize executing = _executing;
-@synthesize finished = _finished;
-
+@synthesize startedExecuteBlock = _startedExecuteBlock;
 - (instancetype)initWithURL:(NSURL *)URL preloadSize:(NSUInteger)bytes progress:(void(^_Nullable)(float progress))progressBlock completed:(void(^_Nullable)(NSError *_Nullable error))completionBlock {
     self = [super init];
     if ( self ) {
+        _semaphore = dispatch_semaphore_create(1);
         _URL = URL;
         _preloadSize = bytes;
         _mcs_progressBlock = progressBlock;
         _mcs_completionBlock = completionBlock;
-        _queue = dispatch_get_global_queue(0, 0);
+    }
+    return self;
+}
+
+- (instancetype)initWithURL:(NSURL *)URL numberOfPreloadedFiles:(NSUInteger)num progress:(void(^_Nullable)(float progress))progressBlock completed:(void(^_Nullable)(NSError *_Nullable error))completionBlock {
+    self = [super init];
+    if ( self ) {
+        _semaphore = dispatch_semaphore_create(1);
+        _URL = URL;
+        _numberOfPreloadedFiles = num;
+        _mcs_progressBlock = progressBlock;
+        _mcs_completionBlock = completionBlock;
+    }
+    return self;
+}
+
+- (instancetype)initWithURL:(NSURL *)URL progress:(void(^_Nullable)(float progress))progressBlock completed:(void(^_Nullable)(NSError *_Nullable error))completionBlock {
+    self = [super init];
+    if ( self ) {
+        _semaphore = dispatch_semaphore_create(1);
+        _URL = URL;
+        _isPrefetchAllMode = YES;
+        _mcs_progressBlock = progressBlock;
+        _mcs_completionBlock = completionBlock;
     }
     return self;
 }
@@ -54,9 +81,8 @@
 }
 
 - (void)prefetcher:(id<MCSPrefetcher>)prefetcher didCompleteWithError:(NSError *_Nullable)error {
-    dispatch_barrier_sync(_queue, ^{
-        [self _completeOperationIfExecuting];
-    });
+    [self _completeOperationIfExecuting];
+
     if ( _mcs_completionBlock != nil ) {
         _mcs_completionBlock(error);
     }
@@ -65,63 +91,73 @@
 #pragma mark -
  
 - (void)start {
-    dispatch_barrier_sync(_queue, ^{
-        [self willChangeValueForKey:@"isExecuting"];
-        self->_isExecuting = YES;
-        [self didChangeValueForKey:@"isExecuting"];
-        
-        if ( self->_isCancelled || self->_URL == nil ) {
-            [self _completeOperationIfExecuting];
-            return;
+    [self willChangeValueForKey:@"isExecuting"];
+    _isExecuting = YES;
+    [self didChangeValueForKey:@"isExecuting"];
+    
+    dispatch_semaphore_wait(_semaphore, DISPATCH_TIME_FOREVER);
+    if ( _isCancelled ) {
+        dispatch_semaphore_signal(_semaphore);
+        [self _completeOperationIfExecuting];
+        return;
+    }
+    dispatch_semaphore_signal(_semaphore);
+    
+    MCSAssetType type = [MCSURL.shared assetTypeForURL:_URL];
+    switch ( type ) {
+        case MCSAssetTypeFILE: {
+            _prefetcher = _isPrefetchAllMode || _numberOfPreloadedFiles != 0 ?
+                [FILEPrefetcher.alloc initWithURL:_URL delegate:self delegateQueue:dispatch_get_main_queue()] :
+                [FILEPrefetcher.alloc initWithURL:_URL preloadSize:_preloadSize delegate:self delegateQueue:dispatch_get_main_queue()];
         }
-        
-        MCSResourceType type = [MCSURLRecognizer.shared resourceTypeForURL:self->_URL];
-        switch ( type ) {
-            case MCSResourceTypeVOD:
-                self->_prefetcher = [MCSVODPrefetcher.alloc initWithURL:self->_URL preloadSize:self->_preloadSize delegate:self delegateQueue:dispatch_get_main_queue()];
-                break;
-            case MCSResourceTypeHLS:
-                self->_prefetcher = [MCSHLSPrefetcher.alloc initWithURL:self->_URL preloadSize:self->_preloadSize delegate:self delegateQueue:dispatch_get_main_queue()];
-                break;
+            break;
+        case MCSAssetTypeHLS: {
+            if ( _isPrefetchAllMode ) {
+                _prefetcher = [HLSPrefetcher.alloc initWithURL:_URL delegate:self delegateQueue:dispatch_get_main_queue()];
+            }
+            else {
+                _prefetcher = _numberOfPreloadedFiles != 0 ?
+                    [HLSPrefetcher.alloc initWithURL:_URL numberOfPreloadedFiles:_numberOfPreloadedFiles delegate:self delegateQueue:dispatch_get_main_queue()] :
+                    [HLSPrefetcher.alloc initWithURL:_URL preloadSize:_preloadSize delegate:self delegateQueue:dispatch_get_main_queue()];
+            }
         }
-        [self->_prefetcher prepare];
-    });
+            break;
+    }
+    [_prefetcher prepare];
+    
+    if ( _startedExecuteBlock != nil ) _startedExecuteBlock(self);
 }
 
 - (void)cancel {
-#ifdef DEBUG
-    NSLog(@"%d - -[%@ %s]", (int)__LINE__, NSStringFromClass([self class]), sel_getName(_cmd));
-#endif
-
-    dispatch_barrier_sync(_queue, ^{
-        if ( self->_isCancelled || self->_isFinished )
-            return;
-        
-        self->_isCancelled = YES;
-        
-        [self _completeOperationIfExecuting];
-    });
+    dispatch_semaphore_wait(_semaphore, DISPATCH_TIME_FOREVER);
+    _isCancelled = YES;
+    dispatch_semaphore_signal(_semaphore);
+    [self _completeOperationIfExecuting];
 }
 
 #pragma mark -
 
 - (void)_completeOperationIfExecuting {
-    if ( !self->_isExecuting )
-        return;
-    
-    if ( self->_isFinished )
-        return;
+    if ( !_isExecuting || _isFinished ) return;
     
     [self willChangeValueForKey:@"isFinished"];
     [self willChangeValueForKey:@"isExecuting"];
+
+    BOOL isChanged = NO;
+    dispatch_semaphore_wait(_semaphore, DISPATCH_TIME_FOREVER);
+    if ( !_isFinished ) {
+        [self->_prefetcher close];
+        self->_prefetcher = nil;
+        _isExecuting = NO;
+        _isFinished = YES;
+        isChanged = YES;
+    }
+    dispatch_semaphore_signal(_semaphore);
     
-    [self->_prefetcher close];
-    self->_prefetcher = nil;
-    self->_isExecuting = NO;
-    self->_isFinished = YES;
-    
-    [self didChangeValueForKey:@"isExecuting"];
-    [self didChangeValueForKey:@"isFinished"];
+    if ( isChanged ) {
+        [self didChangeValueForKey:@"isExecuting"];
+        [self didChangeValueForKey:@"isFinished"];
+    }
 }
 
 #pragma mark -
@@ -131,23 +167,19 @@
 }
 
 - (BOOL)isExecuting {
-    __block BOOL isExecuting = NO;
-    dispatch_sync(_queue, ^{
-        isExecuting = self->_isExecuting;
-    });
-    return isExecuting;
+    return _isExecuting;
 }
 
 - (BOOL)isFinished {
-    __block BOOL isFinished = NO;
-    dispatch_sync(_queue, ^{
-        isFinished = self->_isFinished;
-    });
-    return isFinished;
+    return _isFinished;
 }
 
 - (BOOL)isCancelled {
     return NO;
+}
+
+- (NSString *)description {
+    return [NSString stringWithFormat:@"%@:<%p> { isExecuting: %d, isFinished: %d, isCancelled: %d };", NSStringFromClass(self.class), self, _isExecuting, _isFinished, _isCancelled];
 }
 @end
 
@@ -185,12 +217,27 @@
     return _operationQueue.maxConcurrentOperationCount;
 }
 
-- (id<MCSPrefetchTask>)prefetchWithURL:(NSURL *)URL preloadSize:(NSUInteger)preloadSize {
+- (nullable id<MCSPrefetchTask>)prefetchWithURL:(NSURL *)URL  progress:(void(^_Nullable)(float progress))progressBlock completed:(void(^_Nullable)(NSError *_Nullable error))completionBlock {
+    if ( URL == nil ) return nil;
+    MCSPrefetchOperation *operation = [MCSPrefetchOperation.alloc initWithURL:URL progress:progressBlock completed:completionBlock];
+    [_operationQueue addOperation:operation];
+    return operation;
+}
+
+- (nullable id<MCSPrefetchTask>)prefetchWithURL:(NSURL *)URL preloadSize:(NSUInteger)preloadSize {
     return [self prefetchWithURL:URL preloadSize:preloadSize progress:nil completed:nil];
 }
 
-- (id<MCSPrefetchTask>)prefetchWithURL:(NSURL *)URL preloadSize:(NSUInteger)preloadSize progress:(void(^_Nullable)(float progress))progressBlock completed:(void(^_Nullable)(NSError *_Nullable error))completionBlock {
+- (nullable id<MCSPrefetchTask>)prefetchWithURL:(NSURL *)URL preloadSize:(NSUInteger)preloadSize progress:(void(^_Nullable)(float progress))progressBlock completed:(void(^_Nullable)(NSError *_Nullable error))completionBlock {
+    if ( URL == nil || preloadSize == 0 ) return nil;
     MCSPrefetchOperation *operation = [MCSPrefetchOperation.alloc initWithURL:URL preloadSize:preloadSize progress:progressBlock completed:completionBlock];
+    [_operationQueue addOperation:operation];
+    return operation;
+}
+
+- (nullable id<MCSPrefetchTask>)prefetchWithURL:(NSURL *)URL numberOfPreloadedFiles:(NSUInteger)num progress:(void(^_Nullable)(float progress))progressBlock completed:(void(^_Nullable)(NSError *_Nullable error))completionBlock {
+    if ( URL == nil || num == 0 ) return nil;
+    MCSPrefetchOperation *operation = [MCSPrefetchOperation.alloc initWithURL:URL numberOfPreloadedFiles:num progress:progressBlock completed:completionBlock];
     [_operationQueue addOperation:operation];
     return operation;
 }

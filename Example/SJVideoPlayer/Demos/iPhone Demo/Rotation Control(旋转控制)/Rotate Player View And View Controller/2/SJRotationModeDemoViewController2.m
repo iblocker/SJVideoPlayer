@@ -59,8 +59,8 @@
     
     NSIndexPath *indexPath = [_tableView indexPathForCell:cell];
     SJVideoCellViewModel *item = _viewModel.tableItems[indexPath.row];
-    SJPlayModel *cellModel = [SJPlayModel playModelWithTableView:_tableView indexPath:indexPath];
-    _player.URLAsset = [[SJVideoPlayerURLAsset alloc] initWithURL:item.url playModel:cellModel];
+    SJPlayModel *playModel = [SJPlayModel playModelWithTableView:_tableView indexPath:indexPath superviewSelector:NSSelectorFromString(@"coverImageView")];
+    _player.URLAsset = [[SJVideoPlayerURLAsset alloc] initWithURL:item.url playModel:playModel];
 }
 
 - (void)_observePlayerViewAppearState {
@@ -199,29 +199,3 @@
 }
 
 @end
-
-
-
-/**
- 
- _player.pauseWhenScrollDisappeared = NO;            ///< 滚动消失后, 不暂停
- _player.resumePlaybackWhenScrollAppeared = NO;      ///< 滚动出现后, 如果暂停, 则不恢复播放
- _player.floatSmallViewController.enabled = YES;     ///< 开启小浮窗
- __weak typeof(self) _self = self;
- _player.floatSmallViewController.singleTappedOnTheFloatViewExeBlock =  ///< 单击小浮窗执行的block
- ^(id<SJFloatSmallViewController>  _Nonnull controller) {
- __strong typeof(_self) self = _self;
- if ( !self ) return ;
- [controller dismissFloatView];
- //            [self.navigationController pushViewController:[[ViewControllerContinuePlaying alloc] initWithAsset:self.player.URLAsset] animated:YES];
- };
- _player.floatSmallViewController.doubleTappedOnTheFloatViewExeBlock = ///< 双击小浮窗执行的block
- ^(id<SJFloatSmallViewController>  _Nonnull controller) {
- __strong typeof(_self) self = _self;
- if ( !self ) return ;
- if ( self.player.playStatus == SJVideoPlayerPlayStatusPlaying )
- [self.player pause];
- else
- [self.player play];
- };
- */

@@ -24,7 +24,7 @@
 #import "SJDeviceVolumeAndBrightnessManagerDefines.h"
 #import "SJFloatSmallViewControllerDefines.h"
 #import "SJVideoDefinitionSwitchingInfo.h"
-#import "SJPopPromptControllerDefines.h"
+#import "SJPromptPopupControllerDefines.h"
 #import "SJPlaybackObservation.h"
 #import "SJVideoPlayerPresentViewDefines.h"
 #import "SJSubtitlesPromptControllerDefines.h"
@@ -57,6 +57,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, weak, nullable) id <SJVideoPlayerControlLayerDataSource> controlLayerDataSource;
 @property (nonatomic, weak, nullable) id <SJVideoPlayerControlLayerDelegate> controlLayerDelegate;
 @end
+
+
+@interface SJBaseVideoPlayer (SJAVAudioSessionExtended)
+- (void)setCategory:(AVAudioSessionCategory)category withOptions:(AVAudioSessionCategoryOptions)options;
+- (void)setActiveOptions:(AVAudioSessionSetActiveOptions)options;
+@end
+
 
 #pragma mark - present view
 
@@ -122,7 +129,7 @@ NS_ASSUME_NONNULL_BEGIN
 ///         此模块将是对视频播放的控制, 例如播放, 暂停, 调速, 跳转等等...
 ///         了解更多请前往协议头文件查看
 ///
-@property (nonatomic, strong, null_resettable) id<SJVideoPlayerPlaybackController> playbackController;
+@property (nonatomic, strong, null_resettable) __kindof id<SJVideoPlayerPlaybackController> playbackController;
 
 ///
 /// 观察者
@@ -390,7 +397,7 @@ NS_ASSUME_NONNULL_BEGIN
 ///
 ///         了解更多请前往协议头文件查看
 ///
-@property (nonatomic, strong, null_resettable) id<SJPopPromptController> popPromptController;
+@property (nonatomic, strong, null_resettable) id<SJPromptPopupController> promptPopupController;
 @end
 
 
@@ -452,6 +459,12 @@ NS_ASSUME_NONNULL_BEGIN
 ///
 @property (nonatomic) CGFloat rateWhenLongPressGestureTriggered;
 
+///
+/// 调整水平pan手势移动时的速率
+///
+///         default value is 667.0
+///
+@property (nonatomic) CGFloat offsetFactorForHorizontalPanGesture;
 @end
 
 
@@ -517,35 +530,12 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 
-
-#pragma mark - 自动管理 旋转和充满全屏
-
-@interface SJBaseVideoPlayer (AutoManageViewToFitOnScreenOrRotation)
+#pragma mark - 竖屏小屏 到 竖屏全屏
 
 ///
-/// 自动管理 旋转和充满全屏
-///
-///         自动管理: 当视频宽>高时, 将触发旋转. 当视频宽<高时, 将触发充满全屏
-///
-@property (nonatomic) BOOL autoManageViewToFitOnScreenOrRotation; // default value is YES.
-
-@end
-
-
-#pragma mark - 充满全屏, 禁止旋转
-
-///
-/// 全屏或小屏, 但不触发旋转
-/// v1.3.1 新增
+/// 全屏或小屏, 不会触发旋转
 ///
 @interface SJBaseVideoPlayer (FitOnScreen)
-
-///
-/// 使用充满全屏并且禁止旋转
-///
-///         当调用[player.fitOnScreenManager setFitOnScreen:... animated:...]时, 将自动设置为YES
-///
-@property (nonatomic) BOOL useFitOnScreenAndDisableRotation;
 
 ///
 /// 使播放器充满屏幕并且禁止旋转
@@ -581,8 +571,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setFitOnScreen:(BOOL)fitOnScreen animated:(BOOL)animated completionHandler:(nullable void(^)(__kindof SJBaseVideoPlayer *player))completionHandler;
 @end
 
-#pragma mark - 旋转
+#pragma mark - 竖屏小屏 旋转到 横屏全屏
 
+///
+/// 全屏或小屏, 会触发旋转
+///
 @interface SJBaseVideoPlayer (Rotation)
 
 ///
@@ -607,6 +600,14 @@ NS_ASSUME_NONNULL_BEGIN
 ///         这个block的返回值将会作为触发旋转的一个条件, 当`return NO`时, 将不会触发旋转
 ///
 @property (nonatomic, copy, nullable) BOOL(^shouldTriggerRotation)(__kindof SJBaseVideoPlayer *player);
+
+/// 竖屏全屏后, 是否允许旋转
+///
+///         默认为 NO.
+///
+///         竖屏全屏的状态下(`_player.isFitOnScreen == YES`), 如果想继续触发旋转, 请设置`allowsRotationInFitOnScreen`为YES即可.
+///
+@property (nonatomic) BOOL allowsRotationInFitOnScreen;
 
 /**
  Autorotation. Animated.
@@ -709,6 +710,13 @@ NS_ASSUME_NONNULL_BEGIN
 ///     // 3. 设置双击小浮窗执行的block
 ///     _player.floatSmallViewController.doubleTappedOnTheFloatViewExeBlock = ...;
 ///
+///     // more
+/// #import <SJBaseVideoPlayer/SJFloatSmallViewController.h>
+///
+///     SJFloatSmallViewController *floatSmallViewController = _player.floatSmallViewController;
+///     floatSmallViewController.layoutPosition = SJFloatViewLayoutPositionTopRight;
+///     floatSmallViewController.layoutInsets = UIEdgeInsetsMake(20, 12, 20, 12);
+///     floatSmallViewController.layoutSize = CGSize(300, 300 * 9 / 16.0);
 /// \endcode
 ///
 @property (nonatomic, strong, null_resettable) id<SJFloatSmallViewController> floatSmallViewController;
@@ -718,7 +726,7 @@ NS_ASSUME_NONNULL_BEGIN
 ///
 /// - default value is YES.
 ///
-@property (nonatomic) BOOL autoDisappearFloatSmallView;
+@property (nonatomic, getter=isHiddenFloatSmallViewWhenPlaybackFinished) BOOL hiddenFloatSmallViewWhenPlaybackFinished;
 
 ///
 /// 滚动出去后, 是否暂停. 默认为YES
@@ -854,7 +862,9 @@ NS_ASSUME_NONNULL_BEGIN
 ///
 @property (nonatomic, strong, nullable) UIView<SJWatermarkView> *watermarkView;
 
+- (void)updateWatermarkViewLayout;
 @end
+
 
 #pragma mark - 已弃用
 

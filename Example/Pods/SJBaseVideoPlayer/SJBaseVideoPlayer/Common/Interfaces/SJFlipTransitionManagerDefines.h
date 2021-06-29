@@ -10,10 +10,10 @@
 #import <UIKit/UIKit.h>
 @protocol SJFlipTransitionManagerObserver;
 
-typedef enum : NSUInteger {
+typedef NS_ENUM(NSUInteger, SJViewFlipTransition) {
     SJViewFlipTransition_Identity,
     SJViewFlipTransition_Horizontally, // 水平翻转
-} SJViewFlipTransition;
+};
 
 NS_ASSUME_NONNULL_BEGIN
 @protocol SJFlipTransitionManager <NSObject>
@@ -27,6 +27,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setFlipTransition:(SJViewFlipTransition)t animated:(BOOL)animated;
 - (void)setFlipTransition:(SJViewFlipTransition)t animated:(BOOL)animated completionHandler:(void(^_Nullable)(id<SJFlipTransitionManager> mgr))completionHandler;
 
+@property (nonatomic, strong, nullable) UIView *target;
 - (instancetype)init NS_UNAVAILABLE;
 + (instancetype)new  NS_UNAVAILABLE;
 @end
